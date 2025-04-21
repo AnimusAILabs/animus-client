@@ -39,6 +39,8 @@ export class AuthenticationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'AuthenticationError';
+    // Explicitly set the message property, just in case super() doesn't work as expected in this env
+    this.message = message;
   }
 }
 

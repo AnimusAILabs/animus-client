@@ -24,6 +24,7 @@
     "declaration": true, // Generate .d.ts files
     "declarationDir": "dist/types", // Output directory for .d.ts files
     "declarationMap": true, // Generate source maps for .d.ts files
+    "types": ["vitest/globals", "node"], // Add vitest globals and node types
 
     /* Alias */
     // "baseUrl": ".", // Optional: for path aliases
@@ -31,6 +32,6 @@
     //   "@/*": ["./src/*"]
     // }
   },
-  "include": ["src/**/*.ts"], // Which files to include
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"], // Include tests and vitest config
   "exclude": ["node_modules", "dist"] // Which files to exclude
 }
