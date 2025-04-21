@@ -1,0 +1,34 @@
+{
+  "name": "animus-client-sdk",
+  "version": "0.1.0",
+  "description": "Animus AI Javascript SDK for Browser Environments",
+  "type": "module",
+  "main": "dist/animus-sdk.umd.js",
+  "module": "dist/animus-sdk.esm.js",
+  "types": "dist/types/index.d.ts",
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "animus",
+    "ai",
+    "sdk",
+    "browser"
+  ],
+  "author": "Animus AI",
+  "license": "MIT",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.0",
+    "@rollup/plugin-json": "^6.0.0",
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-typescript": "^11.0.0",
+    "rollup": "^4.0.0",
+    "tslib": "^2.5.0",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist"
+  ]
+}

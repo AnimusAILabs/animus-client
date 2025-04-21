@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Animus SDK Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        pre { background-color: #f4f4f4; padding: 15px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
+        button { padding: 10px 15px; font-size: 1em; cursor: pointer; margin-bottom: 15px; }
+        #output { margin-top: 20px; border-top: 1px solid #ccc; padding-top: 20px; }
+        .error { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Animus SDK Test Page</h1>
+    <p>Open your browser's developer console (F12) to see detailed logs.</p>
+    <p>Ensure the example auth server is running (usually on port 3001).</p>
+
+    <button id="testButton">Run Chat Completion Test</button>
+
+    <div id="output">
+        <h2>Output:</h2>
+        <pre id="result">Click the button to run the test...</pre>
+    </div>
+
+    <!-- Load the UMD build of the SDK -->
+    <script src="../../dist/animus-sdk.umd.js"></script>
+
+    <script>
+        const outputElement = document.getElementById('result');
+        const testButton = document.getElementById('testButton');
+
+        function logOutput(message, isError = false) {
+            console.log(message); // Always log to console
+            const text = typeof message === 'string' ? message : JSON.stringify(message, null, 2);
+            outputElement.textContent = text;
+            if (isError) {
+                outputElement.classList.add('error');
+            } else {
+                outputElement.classList.remove('error');
+            }
+        }
+
+        async function runTest() {
+            logOutput('Initializing AnimusClient...');
+            // Ensure the global AnimusSDK object exists
+            if (typeof AnimusSDK === 'undefined' || typeof AnimusSDK.AnimusClient === 'undefined') {
+                logOutput('Error: AnimusSDK or AnimusSDK.AnimusClient not found. Did the SDK load correctly?', true);
+                return;
+            }
+
+            const tokenProviderUrl = 'http://localhost:3001/token'; // URL of the example auth server
+
+            try {
+                const client = new AnimusSDK.AnimusClient({
+                    tokenProviderUrl: tokenProviderUrl,
+                    // Point to the proxy endpoint on the local auth server
+                    apiBaseUrl: 'http://localhost:3001/proxy',
+                    defaultChatModel: 'vivian-llama3.1-70b-1.0-fp8' // Example default model
+                });
+                logOutput('Client initialized via proxy. Making chat completion request...');
+
+                const messages = [
+                    { role: 'system', content: 'You are a helpful assistant.' },
+                    { role: 'user', content: 'Write a short, funny limerick about Javascript.' }
+                ];
+
+                const response = await client.chat.completions({
+                    messages: messages,
+                    temperature: 0.8,
+                    max_tokens: 60
+                });
+
+                logOutput('Chat completion successful!');
+                logOutput(response.choices[0].message);
+
+            } catch (error) {
+                logOutput('An error occurred during the test:', true);
+                if (error instanceof AnimusSDK.AuthenticationError) {
+                    logOutput(`Authentication Error: ${error.message}`, true);
+                } else if (error instanceof AnimusSDK.ApiError) {
+                    logOutput(`API Error (${error.status}): ${error.message}`, true);
+                    logOutput(error.errorData, true);
+                } else if (error instanceof Error) {
+                    logOutput(`Unexpected Error: ${error.message}\n${error.stack}`, true);
+                } else {
+                    logOutput(error, true);
+                }
+            }
+        }
+
+        testButton.addEventListener('click', runTest);
+
+    </script>
+</body>
+</html>

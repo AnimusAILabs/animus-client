@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    /* Base Options: */
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "target": "ES2017", // Target modern browsers, adjust if needed
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "moduleDetection": "force",
+    "isolatedModules": true,
+
+    /* Strictness */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitAny": true,
+
+    /* Bundled projects */
+    // Be more explicit with libs to ensure Promise, AsyncIterable, string methods, and DOM are included
+    "lib": ["ES2018", "DOM", "DOM.Iterable"],
+    "module": "ESNext", // Let Rollup handle final module format
+    "moduleResolution": "bundler", // Or "node" if preferred
+    "sourceMap": true, // Generate source maps for debugging
+    "outDir": "dist", // Output directory (though Rollup controls final output)
+    "declaration": true, // Generate .d.ts files
+    "declarationDir": "dist/types", // Output directory for .d.ts files
+    "declarationMap": true, // Generate source maps for .d.ts files
+
+    /* Alias */
+    // "baseUrl": ".", // Optional: for path aliases
+    // "paths": {
+    //   "@/*": ["./src/*"]
+    // }
+  },
+  "include": ["src/**/*.ts"], // Which files to include
+  "exclude": ["node_modules", "dist"] // Which files to exclude
+}
