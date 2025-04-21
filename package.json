@@ -1,5 +1,5 @@
 {
-  "name": "animus-client-sdk",
+  "name": "animus-client",
   "version": "0.1.0",
   "description": "Animus AI Javascript SDK for Browser Environments",
   "type": "module",
@@ -22,12 +22,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/<github_username>/animus-client-sdk.git"
+    "url": "git+https://github.com/AnimusAILabs/animus-client.git"
   },
   "bugs": {
-    "url": "https://github.com/<github_username>/animus-client-sdk/issues"
+    "url": "https://github.com/AnimusAILabs/animus-client/issues"
   },
-  "homepage": "https://github.com/<github_username>/animus-client-sdk#readme",
+  "homepage": "https://github.com/AnimusAILabs/animus-client#readme",
   "publishConfig": {
     "access": "public"
   },
@@ -36,8 +36,15 @@
     "@rollup/plugin-json": "^6.0.0",
     "@rollup/plugin-node-resolve": "^15.0.0",
     "@rollup/plugin-typescript": "^11.0.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.1",
+    "@semantic-release/npm": "^12.0.1",
+    "@semantic-release/release-notes-generator": "^14.0.3",
     "jsdom": "^26.1.0",
     "rollup": "^4.0.0",
+    "semantic-release": "^24.2.3",
     "tslib": "^2.5.0",
     "typescript": "^5.0.0",
     "vitest": "^3.1.2"

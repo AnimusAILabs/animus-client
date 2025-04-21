@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch all history and tags for semantic-release
+          fetch-depth: 0
+          # Use a token with write permissions for semantic-release/git
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*' # Use the latest LTS version of Node.js
+
+      - name: Install dependencies
+        run: npm ci # Use ci for faster, reliable installs in CI
+
+      - name: Run tests # Added test step
+        run: npm test
+
+      - name: Build package
+        run: npm run build
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release

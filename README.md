@@ -1,6 +1,6 @@
 # Animus Client SDK (Browser)
 
-[![npm version](https://badge.fury.io/js/animus-client-sdk.svg)](https://badge.fury.io/js/animus-client-sdk) <!-- Placeholder badge -->
+[![npm version](https://badge.fury.io/js/animus-client.svg)](https://badge.fury.io/js/animus-client) <!-- Placeholder badge -->
 
 A Javascript SDK for interacting with the Animus AI API from browser environments.
 
@@ -19,9 +19,9 @@ This SDK simplifies authentication and provides convenient methods for accessing
 ## Installation
 
 ```bash
-npm install animus-client-sdk
+npm install animus-client
 # or
-yarn add animus-client-sdk
+yarn add animus-client
 ```
 
 ## Prerequisites: Token Proxy Endpoint
@@ -44,7 +44,7 @@ An example Node.js/Express implementation of such a proxy can be found in the `/
 ## Usage
 
 ```typescript
-import { AnimusClient, ChatMessage, ApiError, AuthenticationError } from 'animus-client-sdk';
+import { AnimusClient, ChatMessage, ApiError, AuthenticationError } from 'animus-client';
 
 // URL of YOUR backend Token Proxy endpoint
 const tokenProviderUrl = 'https://your-backend.example.com/api/get-animus-token';
@@ -130,7 +130,7 @@ This section details the core components and usage patterns of the Animus Client
 First, import and initialize the main client.
 
 ```typescript
-import { AnimusClient } from 'animus-client-sdk';
+import { AnimusClient } from 'animus-client';
 
 const client = new AnimusClient({
   // Required:
@@ -181,7 +181,7 @@ Interact with chat models. Accessed via `client.chat`. Requires `chat` options t
 The easiest way to have a conversation. Sends a single user message and gets a response, using configured defaults and history.
 
 ```typescript
-import { ApiError, AuthenticationError } from 'animus-client-sdk';
+import { ApiError, AuthenticationError } from 'animus-client';
 
 // Assumes client was initialized with chat options (model, systemMessage)
 try {
@@ -207,7 +207,7 @@ try {
 Provides more control, allowing you to send multiple messages at once and optionally stream the response. Uses configured defaults unless overridden.
 
 ```typescript
-import { ChatMessage } from 'animus-client-sdk';
+import { ChatMessage } from 'animus-client';
 
 // Assumes client was initialized with chat options (model, systemMessage)
 const messages: ChatMessage[] = [
@@ -254,7 +254,7 @@ Interact with vision models. Accessed via `client.media`. Requires `vision` opti
 Ask questions about images. Uses the configured `vision.model` unless overridden in the request.
 
 ```typescript
-import { MediaMessage } from 'animus-client-sdk';
+import { MediaMessage } from 'animus-client';
 
 // Assumes client was initialized with vision options (model)
 const visionMessages: MediaMessage[] = [
@@ -340,7 +340,7 @@ SDK methods can throw specific errors:
 *   `Error`: General configuration errors (e.g., missing required model or system message in config when using dependent methods).
 
 ```typescript
-import { ApiError, AuthenticationError } from 'animus-client-sdk';
+import { ApiError, AuthenticationError } from 'animus-client';
 
 try {
   // ... SDK call ...
@@ -356,6 +356,18 @@ try {
   }
 }
 ```
+
+## Automated Releases
+
+This project uses [semantic-release](https://github.com/semantic-release/semantic-release) to automate the package release process. Releases are triggered automatically on pushes to the `main` branch.
+
+- **Versioning:** Version numbers are determined automatically based on commit messages following the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+- **Changelog:** A `CHANGELOG.md` file is automatically generated and updated with each release.
+- **Publishing:** New versions are automatically published to npm and a GitHub Release is created.
+
+Ensure your commit messages follow the Conventional Commits format to trigger releases correctly (e.g., `feat: Add new feature`, `fix: Correct a bug`, `docs: Update documentation`). Commits like `chore: ...` or `refactor: ...` will not trigger a release unless they include breaking changes in the commit body/footer.
+
+---
 
 ## Development
 
