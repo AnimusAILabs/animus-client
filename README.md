@@ -24,22 +24,22 @@ npm install animus-client
 yarn add animus-client
 ```
 
-## Prerequisites: Token Proxy Endpoint
+## Prerequisites: Secure Token Endpoint
 
-**Important:** To maintain security, this SDK does **not** handle your `clientSecret` directly in the browser. You **must** create a secure backend endpoint (a "Token Proxy") that:
+**Important:** To maintain security, this SDK does **not** handle your `clientSecret` directly in the browser. You **must** create a secure backend endpoint (a "Token Provider Endpoint") that:
 
 1.  Securely stores your Animus `clientId` and `clientSecret`.
-2.  Receives a request from this SDK.
-3.  Uses your credentials to obtain an access token from the Animus Authentication service (details TBD, likely a standard OAuth flow like client credentials).
+2.  Receives a request from this SDK (via the `tokenProviderUrl` option).
+3.  Uses your credentials to generate or obtain a valid Animus JWT access token.
 4.  Returns the access token and its expiry time (in seconds) to the SDK in a JSON format like:
-    ```json
-    {
-      "accessToken": "your_fetched_access_token",
-      "expiresIn": 3600
-    }
-    ```
+   ```json
+   {
+     "accessToken": "your_generated_access_token",
+     "expiresIn": 3600 // Example: 1 hour
+   }
+   ```
 
-An example Node.js/Express implementation of such a proxy can be found in the `/examples/auth-server` directory of this repository.
+An example Node.js/Express implementation demonstrating **only the secure token provisioning** part can be found in the `/examples/auth-server` directory of this repository.
 
 ## Usage
 

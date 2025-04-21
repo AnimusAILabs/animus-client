@@ -55,14 +55,12 @@
             try {
                 const client = new AnimusSDK.AnimusClient({
                     tokenProviderUrl: tokenProviderUrl,
-                    // Point to the proxy endpoint on the local auth server
-                    apiBaseUrl: 'http://localhost:3001/proxy',
-                    chat: {
+                   chat: {
                         model: 'vivian-llama3.1-70b-1.0-fp8',
                         systemMessage: 'You are a helpful assistant.'
                     }
                 });
-                logOutput('Client initialized via proxy. Making chat completion request...');
+                logOutput('Client initialized for direct API calls. Making chat completion request...');
 
                 const messages = [
                     { role: 'user', content: 'Write a short, funny limerick about Javascript.' }

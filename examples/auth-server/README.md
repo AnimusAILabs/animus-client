@@ -1,6 +1,6 @@
-# Example Animus SDK Auth Server (Token Proxy)
+# Example Animus SDK Auth Server (Token Provider)
 
-This directory contains a simple Node.js/Express server acting as a "Token Proxy" for local testing of the Animus Javascript SDK.
+This directory contains a simple Node.js/Express server acting as a "Token Provider" for local testing of the Animus Javascript SDK.
 
 **Disclaimer:** This is a basic example. Production environments require more robust security and error handling.
 
@@ -12,6 +12,8 @@ This server demonstrates securely handling `clientId` and `clientSecret` on a ba
 2.  Provides a `/token` endpoint for the SDK.
 3.  Generates a JWT using `JwtGenerator.js` based on Kong-style configuration.
 4.  Returns the `accessToken` and `expiresIn` time.
+
+This server *only* provides tokens; it does not proxy API calls.
 
 ## Setup
 

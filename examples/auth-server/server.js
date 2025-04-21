@@ -86,67 +86,6 @@ app.post('/token', (req, res) => {
     }
 });
 
-// --- Proxy Route ---
-// This route forwards requests to the Animus API
-app.all('/proxy/*', async (req, res) => {
-  const targetPath = req.params[0]; // Get the path after /proxy/
-  const targetUrl = `${ANIMUS_API_BASE_URL}/${targetPath}`;
-  console.log(`Proxying request: ${req.method} ${targetUrl}`);
-
-  try {
-    // Generate a fresh token for each proxied request
-    const additionalClaims = {
-      aud: jwtAudience,
-      org_id: orgIdForJwt
-    };
-    const accessToken = jwtGenerator.generateToken(clientIdForJwt, null, additionalClaims);
-
-    // Prepare headers for the Animus API request
-    const headers = {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': req.headers['content-type'] || 'application/json', // Forward content-type
-      // Add any other headers you might need to forward
-    };
-
-    // Make the request to the Animus API using axios
-    const response = await axios({
-      method: req.method,
-      url: targetUrl,
-      data: req.body, // Forward the request body
-      headers: headers,
-      responseType: 'stream' // Important for handling different response types correctly
-    });
-
-    // Forward the status code and headers from the Animus API response
-    res.status(response.status);
-    Object.keys(response.headers).forEach(key => {
-      // Avoid setting headers that cause issues (like content-encoding if handled by axios)
-      if (key.toLowerCase() !== 'transfer-encoding' && key.toLowerCase() !== 'content-encoding') {
-         res.setHeader(key, response.headers[key]);
-      }
-    });
-
-    // Pipe the response stream back to the client
-    response.data.pipe(res);
-
-  } catch (error) {
-    console.error('Error proxying request:', error.message);
-    if (error.response) {
-      // If the error came from the target API (Animus)
-      console.error('Animus API Error Status:', error.response.status);
-      console.error('Animus API Error Data:', error.response.data);
-      res.status(error.response.status).send(error.response.data);
-    } else if (error.request) {
-      // The request was made but no response was received
-      console.error('No response received from Animus API');
-      res.status(504).json({ error: 'Gateway Timeout - No response from upstream server' });
-    } else {
-      // Something happened in setting up the request that triggered an Error
-      console.error('Error setting up proxy request:', error.message);
-      res.status(500).json({ error: 'Internal Server Error during proxy request setup' });
-    }
-  }
-});
 
 // --- Start Server ---
 app.listen(port, () => {
