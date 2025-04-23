@@ -18,6 +18,7 @@
     <p>Ensure the example auth server is running (usually on port 3001).</p>
 
     <button id="testButton">Run Chat Completion Test</button>
+    <button id="testWsButton">Run WebSocket JWT Test</button>
 
     <div id="output">
         <h2>Output:</h2>
@@ -91,7 +92,25 @@
         }
 
         testButton.addEventListener('click', runTest);
+    </script>
 
+    <!-- Load the WebSocket test script -->
+    <script src="websocket-test.js"></script>
+
+    <!-- Inline script to attach listeners AFTER other scripts are loaded -->
+    <script>
+        // Re-select button and attach listener now that websocket-test.js is loaded
+        const testWsButton = document.getElementById('testWsButton');
+        if (testWsButton && typeof window.testWebSocketWithJwt === 'function') {
+            testWsButton.addEventListener('click', window.testWebSocketWithJwt);
+            console.log('WebSocket test button listener attached.');
+        } else if (testWsButton) {
+             console.error("WebSocket test button found, but testWebSocketWithJwt function is still not available. Check websocket-test.js for errors.");
+             testWsButton.disabled = true;
+             testWsButton.textContent = "WebSocket Test (Load Error)";
+        } else {
+            console.error("Could not find WebSocket test button (testWsButton).");
+        }
     </script>
 </body>
 </html>

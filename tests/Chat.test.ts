@@ -41,8 +41,15 @@ describe('ChatModule', () => {
     expect((chatModule as any).config?.systemMessage).toBe('Test system message');
   });
 
-  it('should call requestUtil with stream=true and return AsyncIterable for streaming completions', async () => {
-    // Mock the raw Response for streaming, simulating OpenAI SSE format
+  it('should handle streaming completions and update history correctly', async () => {
+    // Re-initialize with history enabled for this test
+    chatModule = new ChatModule(requestUtilMock, {
+        model: 'test-chat-model',
+        systemMessage: 'Test system message',
+        historySize: 4 // Enable history
+    });
+
+    // Mock the raw Response for streaming
     const mockStreamResponse = {
       ok: true,
       status: 200,
@@ -120,9 +127,16 @@ describe('ChatModule', () => {
     expect(chunks[0]!.choices[0]!.delta).toEqual({ role: 'assistant' });
     expect(chunks[1]!.choices[0]!.delta).toEqual({ content: 'Hello' });
     expect(chunks[2]!.choices[0]!.delta).toEqual({ content: ' world!' });
-    expect(accumulatedContent).toBe('Hello world!'); // Verify accumulated content
+    expect(accumulatedContent).toBe('Hello world!');
 
-    requestMock.mockRestore(); // Clean up spy
+    // 4. Verify history update *after* stream consumption
+    // History should contain: User message, Assistant response
+    expect((chatModule as any).chatHistory).toEqual([
+        { role: 'user', content: 'Say hello' },
+        { role: 'assistant', content: 'Hello world!' }
+    ]);
+
+    requestMock.mockRestore();
   });
 
   it('should manage chat history correctly', async () => {
@@ -237,5 +251,266 @@ describe('ChatModule', () => {
 
     requestMock.mockRestore();
   });
+
+  // --- New Tests for Default Parameters & Compliance ---
+
+  describe('Default Parameter Handling & Compliance', () => {
+    it('should apply configured defaults when calling completions', async () => {
+      const defaultOptions = {
+        model: 'default-model',
+        systemMessage: 'Default system',
+        temperature: 0.6,
+        max_tokens: 150,
+        stream: false, // Default stream is false
+        compliance: false, // Override default compliance (which is true)
+        historySize: 5,
+        top_p: 0.8,
+      };
+      chatModule = new ChatModule(requestUtilMock, defaultOptions);
+      const requestMock = vi.spyOn(requestUtilMock, 'request');
+      const mockResponse: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'default-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Default response' }, finish_reason: 'stop' }] };
+      requestMock.mockResolvedValue(mockResponse);
+
+      const request: ChatCompletionRequest = {
+        messages: [{ role: 'user', content: 'Minimal request' }],
+      };
+
+      await chatModule.completions(request);
+
+      expect(requestMock).toHaveBeenCalledWith(
+        'POST',
+        '/chat/completions',
+        {
+          model: 'default-model',
+          messages: [
+            { role: 'system', content: 'Default system' },
+            { role: 'user', content: 'Minimal request' }
+          ],
+          temperature: 0.6,
+          max_tokens: 150,
+          stream: false,
+          compliance: false,
+          top_p: 0.8,
+        },
+        false // stream flag to requestUtil
+      );
+      requestMock.mockRestore();
+    });
+
+    it('should apply configured defaults when calling send', async () => {
+        const defaultOptions = {
+          model: 'default-model-send',
+          systemMessage: 'Default system send',
+          temperature: 0.4,
+          max_tokens: 99,
+          // compliance defaults to true
+          historySize: 3,
+        };
+        chatModule = new ChatModule(requestUtilMock, defaultOptions);
+        const requestMock = vi.spyOn(requestUtilMock, 'request');
+        const mockResponse: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'default-model-send', choices: [{ index: 0, message: { role: 'assistant', content: 'Default send response' }, finish_reason: 'stop' }] };
+        requestMock.mockResolvedValue(mockResponse);
+
+        await chatModule.send('Minimal send request');
+
+        expect(requestMock).toHaveBeenCalledWith(
+          'POST',
+          '/chat/completions',
+          expect.objectContaining({
+            model: 'default-model-send',
+            temperature: 0.4,
+            max_tokens: 99,
+            compliance: true, // Check default is applied
+            stream: false, // send() always sets stream to false
+          }),
+          false
+        );
+        requestMock.mockRestore();
+      });
+
+      it('should default compliance to true and return violations from response', async () => {
+        // Instantiate without compliance in config
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system' });
+        const requestMock = vi.spyOn(requestUtilMock, 'request');
+        // Mock response *with* violations
+        const mockResponse: ChatCompletionResponse = {
+            id: 'r-comp-1',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test-model',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'Violating content' }, finish_reason: 'stop' }],
+            compliance_violations: ["drug_use", "gore"] // Add violations
+        };
+        requestMock.mockResolvedValue(mockResponse);
+
+        const request: ChatCompletionRequest = {
+          messages: [{ role: 'user', content: 'Check compliance default' }],
+          // No compliance specified here either
+        };
+
+        // Call completions
+        const response = await chatModule.completions(request);
+
+        // 1. Check compliance: true was sent
+        expect(requestMock).toHaveBeenCalledWith(
+          'POST',
+          '/chat/completions',
+          expect.objectContaining({
+            compliance: true, // Should default to true
+          }),
+          false
+        );
+
+        // 2. Check the returned response includes the violations
+        expect(response.compliance_violations).toBeDefined();
+        expect(response.compliance_violations).toEqual(["drug_use", "gore"]);
+
+        requestMock.mockRestore();
+      });
+
+      it('should send compliance: false when explicitly set in request', async () => {
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }); // Config defaults to true
+        const requestMock = vi.spyOn(requestUtilMock, 'request');
+        // Mock response *without* violations (as compliance is off)
+        const mockResponse: ChatCompletionResponse = {
+            id: 'r-comp-2',
+            object: 'chat.completion',
+            created: 1,
+            model: 'test-model',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'Non-compliant but unchecked' }, finish_reason: 'stop' }],
+            // No compliance_violations field expected
+        };
+        requestMock.mockResolvedValue(mockResponse);
+
+        const request: ChatCompletionRequest = {
+          messages: [{ role: 'user', content: 'Turn off compliance' }],
+          compliance: false // Explicitly disable compliance for this request
+        };
+
+        const response = await chatModule.completions(request);
+
+        // 1. Check compliance: false was sent
+        expect(requestMock).toHaveBeenCalledWith(
+          'POST',
+          '/chat/completions',
+          expect.objectContaining({
+            compliance: false, // Should be false as requested
+          }),
+          false
+        );
+
+        // 2. Check the returned response does NOT include violations
+        expect(response.compliance_violations).toBeUndefined();
+
+        requestMock.mockRestore();
+      });
+
+      it('should send compliance: false when explicitly set in send options', async () => {
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }); // Config defaults to true
+        const requestMock = vi.spyOn(requestUtilMock, 'request');
+        const mockResponse: ChatCompletionResponse = { id: 'r-comp-3', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Send non-compliant' }, finish_reason: 'stop' }] };
+        requestMock.mockResolvedValue(mockResponse);
+
+        const response = await chatModule.send('Send with compliance off', { compliance: false }); // Disable via options
+
+        // 1. Check compliance: false was sent
+        expect(requestMock).toHaveBeenCalledWith(
+          'POST',
+          '/chat/completions',
+          expect.objectContaining({
+            compliance: false, // Should be false as requested in options
+          }),
+          false
+        );
+
+        // 2. Check the returned response does NOT include violations
+        expect(response.compliance_violations).toBeUndefined();
+
+        requestMock.mockRestore();
+      });
+
+    it('should override configured defaults with completions request parameters', async () => {
+      const defaultOptions = {
+        model: 'default-model',
+        systemMessage: 'Default system',
+        temperature: 0.6,
+        max_tokens: 150,
+        compliance: true,
+        top_p: 0.8,
+      };
+      chatModule = new ChatModule(requestUtilMock, defaultOptions);
+      const requestMock = vi.spyOn(requestUtilMock, 'request');
+      const mockResponse: ChatCompletionResponse = { id: 'r-override-1', object: 'chat.completion', created: 1, model: 'override-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Override response' }, finish_reason: 'stop' }] };
+      requestMock.mockResolvedValue(mockResponse);
+
+      const request: ChatCompletionRequest = {
+        messages: [{ role: 'user', content: 'Override request' }],
+        model: 'override-model', // Override
+        temperature: 0.9,       // Override
+        max_tokens: 50,         // Override
+        compliance: false,      // Override
+        // top_p is NOT overridden, should use default
+        n: 2                    // New param, not in defaults
+      };
+
+      await chatModule.completions(request);
+
+      expect(requestMock).toHaveBeenCalledWith(
+        'POST',
+        '/chat/completions',
+        expect.objectContaining({
+          model: 'override-model', // Check override
+          temperature: 0.9,       // Check override
+          max_tokens: 50,         // Check override
+          compliance: false,      // Check override
+          top_p: 0.8,             // Check default is used
+          n: 2,                   // Check new param is included
+          stream: false,          // Check default stream=false is applied
+        }),
+        false
+      );
+      requestMock.mockRestore();
+    });
+
+    it('should override configured defaults with send options', async () => {
+        const defaultOptions = {
+          model: 'default-model-send',
+          systemMessage: 'Default system send',
+          temperature: 0.4,
+          max_tokens: 99,
+          compliance: true,
+        };
+        chatModule = new ChatModule(requestUtilMock, defaultOptions);
+        const requestMock = vi.spyOn(requestUtilMock, 'request');
+        const mockResponse: ChatCompletionResponse = { id: 'r-override-2', object: 'chat.completion', created: 1, model: 'override-model-send', choices: [{ index: 0, message: { role: 'assistant', content: 'Override send response' }, finish_reason: 'stop' }] };
+        requestMock.mockResolvedValue(mockResponse);
+
+        await chatModule.send('Override send request', {
+            model: 'override-model-send', // Override
+            temperature: 0.1,           // Override
+            max_tokens: 200,            // Override
+            compliance: false,          // Override
+            top_p: 0.7                  // New param, not in defaults
+        });
+
+        expect(requestMock).toHaveBeenCalledWith(
+          'POST',
+          '/chat/completions',
+          expect.objectContaining({
+            model: 'override-model-send', // Check override
+            temperature: 0.1,           // Check override
+            max_tokens: 200,            // Check override
+            compliance: false,          // Check override
+            top_p: 0.7,                 // Check new param is included
+            stream: false,              // send() always sets stream to false
+          }),
+          false
+        );
+        requestMock.mockRestore();
+      });
+
+  });
+
+  // --- End New Tests ---
 
 });

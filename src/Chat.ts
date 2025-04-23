@@ -115,36 +115,47 @@ export class ChatModule {
     request: ChatCompletionRequest
   ): Promise<ChatCompletionResponse | AsyncIterable<ChatCompletionChunk>> {
 
-    // Start with essential parameters
-    const payload: Record<string, any> = { // Use Record<string, any> for dynamic building
-      messages: request.messages, // Placeholder, will be replaced by history logic
-      model: request.model ?? this.config?.model, // Prioritize request model, then config model
-    };
-
-    // Validate model presence (either in request or config)
-    if (!payload.model) {
-      throw new Error('Chat model must be specified either in the request or in the AnimusClient chat configuration.');
+    // --- Parameter Validation & Merging ---
+    // Validate essential config presence if chat module is used
+    if (!this.config?.model) {
+        throw new Error('Chat model must be configured in AnimusClient chat options to use chat methods.');
     }
-    // Validate system message presence (must be in config if chat module is used)
     if (!this.systemMessage) {
         throw new Error('Chat systemMessage must be configured in AnimusClient chat options to use chat methods.');
     }
 
-    // Conditionally add optional parameters ONLY if they exist in the request object
-    if (request.temperature !== undefined) payload.temperature = request.temperature;
-    if (request.top_p !== undefined) payload.top_p = request.top_p;
-    if (request.n !== undefined) payload.n = request.n;
-    if (request.max_tokens !== undefined) payload.max_tokens = request.max_tokens;
-    if (request.stop !== undefined) payload.stop = request.stop;
-    if (request.stream !== undefined) payload.stream = request.stream;
-    if (request.presence_penalty !== undefined) payload.presence_penalty = request.presence_penalty;
-    if (request.frequency_penalty !== undefined) payload.frequency_penalty = request.frequency_penalty;
-    if (request.best_of !== undefined) payload.best_of = request.best_of;
-    if (request.top_k !== undefined) payload.top_k = request.top_k;
-    if (request.repetition_penalty !== undefined) payload.repetition_penalty = request.repetition_penalty;
-    if (request.min_p !== undefined) payload.min_p = request.min_p;
-    if (request.length_penalty !== undefined) payload.length_penalty = request.length_penalty;
-    if (request.compliance !== undefined) payload.compliance = request.compliance;
+    // Start with defaults from config, then override with request params
+    const defaults = this.config || {};
+    const payload: Record<string, any> = {
+        // Core required params (request overrides config)
+        model: request.model ?? defaults.model,
+        messages: request.messages, // Placeholder, history logic below
+
+        // Optional params (request overrides config)
+        temperature: request.temperature ?? defaults.temperature,
+        top_p: request.top_p ?? defaults.top_p,
+        n: request.n ?? defaults.n,
+        max_tokens: request.max_tokens ?? defaults.max_tokens,
+        stop: request.stop ?? defaults.stop,
+        stream: request.stream ?? defaults.stream ?? false, // Default stream to false if not set anywhere
+        presence_penalty: request.presence_penalty ?? defaults.presence_penalty,
+        frequency_penalty: request.frequency_penalty ?? defaults.frequency_penalty,
+        best_of: request.best_of ?? defaults.best_of,
+        top_k: request.top_k ?? defaults.top_k,
+        repetition_penalty: request.repetition_penalty ?? defaults.repetition_penalty,
+        min_p: request.min_p ?? defaults.min_p,
+        length_penalty: request.length_penalty ?? defaults.length_penalty,
+        // Compliance defaults to true if not specified in request or config
+        compliance: request.compliance ?? defaults.compliance ?? true,
+    };
+
+     // Remove undefined values to avoid sending them in the payload
+     Object.keys(payload).forEach(key => {
+        if (payload[key] === undefined) {
+            delete payload[key];
+        }
+    });
+    // --- End Parameter Validation & Merging ---
 
 
     // --- System Message & History Management ---
@@ -173,9 +184,9 @@ export class ChatModule {
 
 
     if (payload.stream) { // Check the final payload value
-      // TODO: Implement history update for streaming responses.
-      // This likely requires accumulating the streamed response content
-      // *after* the stream completes and then updating chatHistory.
+      // Store the user messages that were sent *before* processing the stream
+      const sentUserMessages = request.messages;
+
       const response = await this.requestUtil.request(
         'POST',
         '/chat/completions',
@@ -186,9 +197,11 @@ export class ChatModule {
       if (!response.body) {
         throw new ApiError('Streaming response body is null', response.status);
       }
-      return this.processStream(response.body);
+      // Pass the user messages to processStream so history can be updated
+      return this.processStream(response.body, sentUserMessages);
 
     } else {
+      // Non-streaming case (history update logic remains here)
       const response = await this.requestUtil.request<ChatCompletionResponse>(
         'POST',
         '/chat/completions',
@@ -236,38 +249,67 @@ export class ChatModule {
 
       const userMessage: ChatMessage = { role: 'user', content: messageContent };
 
-      // Prepare the request for the completions method
-      const request: ChatCompletionRequest = {
+      // Prepare the request for the completions method, merging options and config
+      const defaults = this.config || {}; // Use validated config
+      const requestOptions = options || {};
+
+      const completionRequest: ChatCompletionRequest = {
           messages: [userMessage], // Only the new user message
-          // Prioritize model in options, then config, then error (handled by completions)
-          model: options?.model ?? this.config.model,
-          // Apply configured defaults if not overridden in options
-          temperature: options?.temperature ?? this.config.temperature,
-          top_p: options?.top_p ?? this.config.top_p,
-          max_tokens: options?.max_tokens ?? this.config.max_tokens,
-          // Spread any other options provided, potentially overriding defaults again if explicitly set
-          ...options,
-          stream: false, // send() does not support streaming
+
+          // Merge parameters: options override config defaults
+          model: requestOptions.model ?? defaults.model,
+          temperature: requestOptions.temperature ?? defaults.temperature,
+          top_p: requestOptions.top_p ?? defaults.top_p,
+          n: requestOptions.n ?? defaults.n,
+          max_tokens: requestOptions.max_tokens ?? defaults.max_tokens,
+          stop: requestOptions.stop ?? defaults.stop,
+          presence_penalty: requestOptions.presence_penalty ?? defaults.presence_penalty,
+          frequency_penalty: requestOptions.frequency_penalty ?? defaults.frequency_penalty,
+          best_of: requestOptions.best_of ?? defaults.best_of,
+          top_k: requestOptions.top_k ?? defaults.top_k,
+          repetition_penalty: requestOptions.repetition_penalty ?? defaults.repetition_penalty,
+          min_p: requestOptions.min_p ?? defaults.min_p,
+          length_penalty: requestOptions.length_penalty ?? defaults.length_penalty,
+          // Compliance defaults to true if not specified in options or config
+          compliance: requestOptions.compliance ?? defaults.compliance ?? true,
+
+          stream: false, // send() explicitly does not support streaming
       };
+
+       // Remove undefined values before sending
+       Object.keys(completionRequest).forEach(key => {
+           if ((completionRequest as any)[key] === undefined) {
+               delete (completionRequest as any)[key];
+           }
+       });
 
       // Call the main completions method
       // Type assertion needed because send() guarantees non-streaming
-      return await this.completions(request) as ChatCompletionResponse;
+      return await this.completions(completionRequest) as ChatCompletionResponse;
   }
 
   /**
-   * Processes the Server-Sent Events (SSE) stream.
+   * Processes the Server-Sent Events (SSE) stream and updates history upon completion.
+   * @param stream The ReadableStream from the fetch response.
+   * @param sentUserMessages The user messages that were part of the request triggering this stream.
    */
-  private async *processStream(stream: ReadableStream<Uint8Array>): AsyncIterable<ChatCompletionChunk> {
+  private async *processStream(
+      stream: ReadableStream<Uint8Array>,
+      sentUserMessages: ChatMessage[] // Receive user messages for history update
+  ): AsyncIterable<ChatCompletionChunk> {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let accumulatedContent = ''; // To store the full response content
+    let finalAssistantMessage: ChatMessage | null = null;
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) {
-          break;
+          // --- Stream ended (by closing) ---
+          // This might happen if [DONE] is missed or connection drops
+          break; // Exit loop to perform final history update
         }
 
         buffer += decoder.decode(value, { stream: true });
@@ -282,41 +324,69 @@ export class ChatModule {
           if (line.startsWith('data: ')) {
             const data = line.substring(6).trim();
             if (data === '[DONE]') {
-              return; // Stream finished signal
+              // --- Stream finished (via [DONE] signal) ---
+              // Final history update happens in the finally block
+              return; // End the generator cleanly
             }
             try {
               const chunk = JSON.parse(data) as ChatCompletionChunk;
-              yield chunk;
+              // Accumulate content from delta
+              const deltaContent = chunk.choices?.[0]?.delta?.content;
+              if (deltaContent) {
+                  accumulatedContent += deltaContent;
+              }
+              yield chunk; // Yield the chunk to the consumer
             } catch (e) {
               console.error('Failed to parse stream chunk:', data, e);
-              // Decide how to handle parse errors: continue, throw, etc.
             }
           } else {
-            // Handle potential non-data lines if necessary
             console.warn('Received non-data line in stream:', line);
           }
         }
       }
 
-      // Process any remaining buffer content if needed
+      // Process any remaining buffer content if stream ended without [DONE]
       if (buffer.trim() !== '') {
          if (buffer.startsWith('data: ')) {
              const data = buffer.substring(6).trim();
              if (data !== '[DONE]') {
                  try {
                      const chunk = JSON.parse(data) as ChatCompletionChunk;
-                     yield chunk;
-                 } catch (e) {
-                     console.error('Failed to parse final stream chunk:', data, e);
-                 }
+                     const deltaContent = chunk.choices?.[0]?.delta?.content;
+                     if (deltaContent) { accumulatedContent += deltaContent; }
+                     yield chunk; // Yield potential last chunk
+                 } catch (e) { console.error('Failed to parse final stream chunk:', data, e); }
              }
-         } else if (buffer.trim() !== '[DONE]') { // Avoid warning for just [DONE]
-            console.warn('Stream ended with unprocessed buffer:', buffer);
-         }
+         } else { console.warn('Stream ended with unprocessed buffer:', buffer); }
       }
 
     } finally {
+      // --- Final History Update (Guaranteed to run) ---
+      if (accumulatedContent) {
+          finalAssistantMessage = { role: 'assistant', content: accumulatedContent };
+      }
+      // Update history using the user messages passed in and the accumulated assistant message
+      this.updateHistory(sentUserMessages, finalAssistantMessage);
+
       reader.releaseLock();
     }
+  }
+
+  /** Helper function to update history consistently */
+  private updateHistory(userMessages: ChatMessage[], assistantMessage: ChatMessage | null): void {
+      const historySize = this.config?.historySize ?? 0;
+      // Only update if history is enabled
+      if (historySize > 0) {
+          // Add the user message(s) from the original request
+          this.chatHistory.push(...userMessages);
+          // Add the assistant's response if available
+          if (assistantMessage) {
+              this.chatHistory.push(assistantMessage);
+          }
+          // Trim history (maintaining only user/assistant messages up to window size)
+          if (this.chatHistory.length > historySize) {
+              this.chatHistory = this.chatHistory.slice(-historySize);
+          }
+      }
   }
 }

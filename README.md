@@ -138,9 +138,28 @@ const client = new AnimusClient({
 
   // Optional: Configure chat defaults (model & systemMessage required if chat object is present)
   chat: {
-    model: 'vivian-llama3.1-8b-1.0-fp8', // Required if providing chat config
-    systemMessage: 'You are Animus, a helpful AI assistant.', // Required if providing chat config
-    temperature: 0.7 // Optional chat default
+    // --- Required ---
+    model: 'vivian-llama3.1-8b-1.0-fp8', // Required: Default model ID
+    systemMessage: 'You are Animus, a helpful AI assistant.', // Required: Default system prompt
+
+    // --- Optional API Parameter Defaults ---
+    temperature: 0.7,       
+    // top_p: 1.0,          // Default: 1
+    // n: 1,                // Default: 1 (Number of choices - typically 1 for chat)
+    max_tokens: 500,        // No API default (model-specific), SDK sets example
+    // stop: ["\n"],        // Default: null
+    stream: false,          // Default: false
+    // presence_penalty: 0.0,  // Default: 0 (API default is 1, but 0 is common practice)
+    // frequency_penalty: 0.0, // Default: 0 (API default is 1, but 0 is common practice)
+    // best_of: 1,          // Default: 1
+    // top_k: 40,           // Default: 40
+    // repetition_penalty: 1.0, // Default: 1
+    // min_p: 0.0,          // Default: 0
+    // length_penalty: 1.0, // Default: 1
+    compliance: true,       // Default: false (Enables content moderation)
+
+    // --- Optional SDK Specific ---
+    historySize: 30         // Default: 0 (disabled) number of turns to send to the LLM for conversational context
   },
 
   // Optional: Configure vision defaults (model required if vision object is present)
@@ -152,7 +171,7 @@ const client = new AnimusClient({
   // Optional: Other top-level settings
   // apiBaseUrl: 'https://api.animusai.co/v3',
   // tokenStorage: 'localStorage', // 'sessionStorage' is default
-  // conversationWindowSize: 10 // Default is 0 (disabled), requires chat config
+  // historySize: 10 // Default is 0 (disabled), requires chat config
 });
 ```
 
@@ -161,14 +180,28 @@ const client = new AnimusClient({
 *   `tokenProviderUrl` (**required**, `string`): The URL of your secure backend endpoint that provides Animus access tokens.
 *   `apiBaseUrl` (optional, `string`): Overrides the default Animus API endpoint (`https://api.animusai.co/v3`).
 *   `tokenStorage` (optional, `'sessionStorage' | 'localStorage'`): Choose where to store the auth token (default: `'sessionStorage'`).
-*   `conversationWindowSize` (optional, `number`): Enables automatic chat history management if set > 0. Requires `chat` configuration to be present. Default is `0` (disabled).
-*   `chat` (optional, `AnimusChatOptions`): If provided, enables chat features and sets defaults.
-    *   `model` (**required** if `chat` provided, `string`): Default model for chat requests.
-    *   `systemMessage` (**required** if `chat` provided, `string`): Default system prompt for chat.
-    *   `temperature`, `top_p`, `max_tokens` (optional, `number`): Default parameters for chat requests.
+*   `historySize` (optional, `number`): Enables automatic chat history management if set > 0. Requires `chat` configuration to be present. Default is `0` (disabled).
+*   `chat` (optional, `AnimusChatOptions`): If provided, enables chat features and sets defaults for chat requests.
+    *   `model` (**required**, `string`): Default model ID (e.g., `"animuslabs/Vivian-llama3.1-70b-1.0-fp8"`).
+    *   `systemMessage` (**required**, `string`): Default system prompt.
+    *   `temperature` (optional, `number`, default: 1): Controls randomness.
+    *   `top_p` (optional, `number`, default: 1): Nucleus sampling threshold.
+    *   `n` (optional, `number`, default: 1): Number of choices to generate.
+    *   `max_tokens` (optional, `number`, no API default): Max tokens in response.
+    *   `stop` (optional, `string[]`, default: null): Stop sequences.
+    *   `stream` (optional, `boolean`, default: false): Enable streaming response.
+    *   `presence_penalty` (optional, `number`, default: 1): Penalizes new words based on presence.
+    *   `frequency_penalty` (optional, `number`, default: 1): Penalizes words based on frequency.
+    *   `best_of` (optional, `number`, default: 1): Server-side generations for best result.
+    *   `top_k` (optional, `number`, default: 40): Limits sampling to top k tokens.
+    *   `repetition_penalty` (optional, `number`, default: 1): Penalizes repeating tokens.
+    *   `min_p` (optional, `number`, default: 0): Minimum probability threshold for tokens.
+    *   `length_penalty` (optional, `number`, default: 1): Adjusts impact of sequence length.
+    *   `compliance` (optional, `boolean`, default: true): Enables content moderation (see **Content Compliance** section below).
+    *   `historySize` (optional, `number`, default: 0): Enables automatic chat history management (SDK feature).
 *   `vision` (optional, `AnimusVisionOptions`): If provided, enables vision features and sets defaults.
-    *   `model` (**required** if `vision` provided, `string`): Default model for vision requests (completions and analysis).
-    *   `temperature` (optional, `number`): Default temperature for vision completion requests.
+    *   `model` (**required** if `vision` provided, `string`): Default model for vision requests.
+    *   `temperature` (optional, `number`): Default temperature for vision *completion* requests.
 
 ---
 
@@ -245,7 +278,36 @@ try {
 
 ---
 
-### 3. Media / Vision (`client.media`)
+### 3. Content Compliance (Chat Moderation)
+
+The Animus API integrates content moderation directly into the chat completions endpoint via the `compliance` parameter.
+
+*   **Enabling:** Set `compliance: true` in the `AnimusChatOptions` during client initialization (this is the default) or within a specific `client.chat.completions` or `client.chat.send` request.
+*   **Disabling:** Set `compliance: false` to bypass moderation checks.
+*   **Response:** When enabled and violations are detected, the `ChatCompletionResponse` object will contain a `compliance_violations` field, which is an array of strings indicating the detected categories (e.g., `["drug_use", "gore"]`).
+
+```typescript
+const response = await client.chat.send("Some potentially non-compliant text.");
+
+if (response.compliance_violations && response.compliance_violations.length > 0) {
+  console.warn("Content violations detected:", response.compliance_violations);
+  // Handle the violation (e.g., notify user, discard response)
+} else {
+  // No violations detected, proceed with the response content
+  console.log("AI:", response.choices[0].message.content);
+}
+```
+
+*   **Violation Categories:** The system can detect categories such as `pedophilia`, `beastiality`, `murder`, `rape`, `incest`, `gore`, `prostitution`, and `drug_use`.
+*   **Best Practices:**
+    *   Keep `compliance: true` (the default) for user-generated content.
+    *   Implement user-friendly handling for flagged content.
+    *   Consider basic client-side filtering for obvious violations.
+    *   Review flagged content periodically to understand patterns.
+
+---
+
+### 4. Media / Vision (`client.media`)
 
 Interact with vision models. Accessed via `client.media`. Requires `vision` options (with `model`) to be configured during client initialization to use configured defaults.
 
@@ -321,7 +383,7 @@ try {
 
 ---
 
-### 4. Authentication (`client.clearAuthToken`)
+### 5. Authentication (`client.clearAuthToken`)
 
 Manually clear the stored authentication token.
 
@@ -331,7 +393,7 @@ client.clearAuthToken();
 
 ---
 
-### 5. Error Handling
+### 6. Error Handling
 
 SDK methods can throw specific errors:
 

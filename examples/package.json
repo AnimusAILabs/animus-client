@@ -1,0 +1,14 @@
+{
+  "name": "animus-client-examples",
+  "version": "1.0.0",
+  "description": "Dependencies for Animus Client SDK examples",
+  "private": true,
+  "scripts": {
+    "start:auth-server": "node ./animus-auth-server/server.js",
+    "start:ws-validator": "node ./websocket-validator/server.js"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.17.1"
+  }
+}
