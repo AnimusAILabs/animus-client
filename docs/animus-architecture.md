@@ -53,7 +53,7 @@ graph LR
     subgraph "Animus Services"
         API[Animus API]
         RTS[Animus Realtime Server]
-        AAS[Animus Auth Service\n(/generate-token)]
+        AAS["Animus Auth Service"]
         LK[LiveKit Service]
         ZEP[ZEP/Graffiti Memory]
     end
@@ -67,16 +67,16 @@ graph LR
     end
 
     %% Connections
-    CAS -->|"1. Request JWT\n(Client API Key)"| Kong
-    Kong -->|"2. Forward to AAS"| AAS
-    AAS -->|"3. Issue JWT"| Kong
-    Kong -->|"4. Return JWT"| CAS
-    CAS -->|"5. Return JWT"| SDK
+    CAS -->|"Req JWT"| Kong
+    Kong -->|"Forward to AAS"| AAS
+    AAS -->|"Issue JWT"| Kong
+    Kong -->|"Return JWT"| CAS
+    CAS -->|"Return JWT"| SDK
 
-    SDK -->|"API Calls (JWT)"| Kong
+    SDK -->|"API Calls"| Kong
     Kong -->|"Route API Call"| API
 
-    SDK -->|"WebSocket (JWT)"| RTS
+    SDK -->|"WebSocket"| RTS
 
     RTS -->|"Chat/Messages"| LLM
     RTS -->|"Voice/Video Proxy"| LK
@@ -145,7 +145,8 @@ graph TD
     classDef section fill:#E5A158,stroke:#9C6644,color:#000000,font-weight:bold
     classDef options fill:#8FC69E,stroke:#0F5D11,color:#000000,font-weight:bold
 
-    class SDKInit,Config, ClientAuthURL main
+    class SDKInit,Config,ClientAuthURL main
+
     class SessionConfig,ServiceMode,UseRealtime,MemoryOptions,ModelPreferences section
     class SessionID,UserID,UseApi,Observer,Audio,Vision,MemoryEnabled,RetentionPeriod,PreferredLLM,PreferredTTS,PreferredSTT options
 ```
@@ -198,7 +199,7 @@ flowchart TD
     ApiPath -->|No| ErrorAPI([Error: API Disabled])
 
 
-    ActionType -->|Realtime Action\n(e.g., connect, send message)| RTPath{useRealtime Enabled?}
+    ActionType -->|"Realtime Action"| RTPath{useRealtime Enabled?}
     RTPath -->|Yes| CheckConnection{WebSocket Connected?}
     CheckConnection -->|No| ConnectWS[Connect to Animus Realtime Server]
     ConnectWS --> AddJWT_WS[Add JWT]
@@ -455,17 +456,17 @@ graph TD
 
     %% Connections
     ClientApp --> SDK
-    SDK -->|"1. Request Tokens"| CAS
-    CAS -->|"2. Req JWT (API Key)"| Kong
-    Kong -->|"3. Fwd to AAS"| AAS
-    AAS -->|"4. Issue JWT"| Kong
-    Kong -->|"5. Return JWT"| CAS
-    CAS -->|"6. Return JWT"| SDK
+    SDK -->|"Request Tokens"| CAS
+    CAS -->|"Req JWT"| Kong
+    Kong -->|"Fwd to AAS"| AAS
+    AAS -->|"Issue JWT"| Kong
+    Kong -->|"Return JWT"| CAS
+    CAS -->|"Return JWT"| SDK
 
-    SDK -->|"API Calls (JWT)"| Kong
+    SDK -->|"API Calls"| Kong
     Kong -->|"Route API"| API
 
-    SDK -->|"WebSocket (JWT)"| RTS
+    SDK -->|"WebSocket"| RTS
 
     API --> AIModels
     API <--> ZEP
@@ -474,7 +475,8 @@ graph TD
     RTS -->|"Proxy/Control"| LK
     RTS <--> ZEP
 
-    LK --> AIModels  // For direct media processing if needed
+    %% For direct media processing if needed
+    LK --> AIModels
 
     %% Styling
     classDef client fill:#86C1D4,stroke:#05445E,color:#000000,font-weight:bold
@@ -489,52 +491,3 @@ graph TD
     class AIModels aiModels
     class ZEP memory
 ```
-
-## Recommended SDK Configuration Structure
-
-```javascript
- const animusSDK = new AnimusSDK({
-   // **REQUIRED**: URL for fetching tokens from client's backend
-   clientAuthServerUrl: "https://your-backend.com/api/animus-auth",
-
-   // Core service mode configuration
-   mode: {
-     useApi: true,                 // Enable synchronous API calls via Kong (uses the JWT)
-     useRealtime: {                 // Real-time capabilities via Animus Realtime Server (uses the JWT)
-       enabled: true,            // Master switch for real-time features
-       observer: true,           // Allow AI to proactively message
-       audio: true,              // Enable speech capabilities (via LiveKit proxy)
-       vision: true              // Enable visual input processing (via LiveKit proxy)
-     }
-   },
-
-   // Session tracking
-   session: {
-     id: "user123-session456",   // Unique session identifier
-     userId: "user789",          // User identifier
-     persist: true               // Persist session between page loads (SDK implementation detail)
-   },
-
-   // Memory configuration
-   memory: {
-     enabled: true,              // Enable conversation history (ZEP)
-     retentionDays: 30,          // Store conversations for 30 days
-     contextWindow: 10           // Number of previous exchanges to include (if supported)
-   },
-
-   // Model preferences
-   models: {
-     llm: "animus-chat-1",       // LLM model preference
-     tts: "animus-voice-natural", // TTS model preference
-     stt: "animus-transcribe-1"  // STT model preference
-   },
-
-   // Media handling (Primarily affects LiveKit interaction)
-   media: {
-     audioQuality: "high",       // Audio quality setting
-     videoResolution: "720p",    // Video resolution for vision features
-     captureDevice: "default"    // Camera/mic device selection
-   }
- });
- ```
- This configuration structure provides a comprehensive way to control all aspects of the SDK's behavior while maintaining flexibility for future enhancements.
