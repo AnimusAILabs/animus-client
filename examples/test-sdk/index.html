@@ -94,6 +94,8 @@
         testButton.addEventListener('click', runTest);
     </script>
 
+    <!-- Load the LiveKit Client SDK (UMD) -->
+    <script src="../node_modules/livekit-client/dist/livekit-client.umd.js"></script>
     <!-- Load the WebSocket test script -->
     <script src="websocket-test.js"></script>
 
@@ -101,11 +103,12 @@
     <script>
         // Re-select button and attach listener now that websocket-test.js is loaded
         const testWsButton = document.getElementById('testWsButton');
-        if (testWsButton && typeof window.testWebSocketWithJwt === 'function') {
-            testWsButton.addEventListener('click', window.testWebSocketWithJwt);
-            console.log('WebSocket test button listener attached.');
+        // Check for the new function name exposed by the updated websocket-test.js
+        if (testWsButton && typeof window.testLiveKitWebSocketWithSdk === 'function') {
+            testWsButton.addEventListener('click', window.testLiveKitWebSocketWithSdk);
+            console.log('LiveKit WebSocket test button listener attached.');
         } else if (testWsButton) {
-             console.error("WebSocket test button found, but testWebSocketWithJwt function is still not available. Check websocket-test.js for errors.");
+             console.error("WebSocket test button found, but testLiveKitWebSocketWithSdk function is not available. Check websocket-test.js for errors or if the SDK loaded correctly.");
              testWsButton.disabled = true;
              testWsButton.textContent = "WebSocket Test (Load Error)";
         } else {

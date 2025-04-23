@@ -31,37 +31,42 @@ app.get('/', (req, res) => {
 
 // Token endpoint - Proxies request to the central Animus Auth Service
 // Handles both GET and POST requests from the SDK
+// Token endpoint - Kept as /token locally for compatibility
+// Proxies request to the central Animus Auth Service (expected to be /generate-token now)
 app.all('/token', async (req, res) => {
-  console.log(`Received token request from SDK (${req.method}). Fetching JWT from Animus Auth Service...`);
- 
+  console.log(`Received /token request from SDK (${req.method}). Proxying to central Animus Auth Service at ${animusAuthUrl}...`);
+
   try {
-    const response = await axios.get(animusAuthUrl, {
+    // Use GET, assuming the central service expects GET for its /generate-token endpoint
+    // If it expects POST, change axios.get to axios.post and potentially add an empty body
+    const response = await axios.get(animusAuthUrl, { // animusAuthUrl should point to the central /generate-token endpoint
       headers: {
-        'apikey': animusApiKey,
+        'apikey': animusApiKey, // Send the API key needed by the central service
         'Accept': 'application/json' // Ensure we get JSON back
       }
+      // Add body if central service requires POST: body: {}
     });
- 
-    // The Animus Auth Service should return { "token": "..." }
-    if (response.data && response.data.token) {
-      console.log('Successfully received JWT from Animus Auth Service.');
-      res.json({
-        accessToken: response.data.token
-        // No need for expiresIn here, it's in the JWT payload
-      });
+
+    // The central Animus Auth Service should now return { animus: { token: "..." }, livekit: { url: "...", token: "..." } }
+    if (response.data && response.data.animus && response.data.livekit) {
+      console.log('Successfully received Animus and LiveKit details from central Animus Auth Service.');
+      // Return the full response object directly to the client
+      res.json(response.data);
     } else {
-      console.error('Animus Auth Service response did not contain a token:', response.data);
-      res.status(500).json({ error: 'Invalid response received from Animus Auth Service' });
+      console.error('Central Animus Auth Service response did not contain expected animus/livekit data:', response.data);
+      res.status(500).json({ error: 'Invalid response received from central Animus Auth Service' });
     }
- 
+
   } catch (error) {
-    console.error('Error fetching token from Animus Auth Service:', error.response ? error.response.data : error.message);
+    const errorData = error.response ? error.response.data : error.message;
+    const errorStatus = error.response ? error.response.status : 500;
+    console.error(`Error fetching details from central Animus Auth Service (Status: ${errorStatus}):`, errorData);
     // Proxy the error status and message if available
     const status = error.response ? error.response.status : 500;
-    const message = error.response && error.response.data && error.response.data.message
-                      ? error.response.data.message
-                      : 'Internal server error while contacting Animus Auth Service';
-    res.status(status).json({ error: message });
+    const message = error.response && error.response.data && (error.response.data.error || error.response.data.message)
+                      ? (error.response.data.error || error.response.data.message)
+                      : 'Internal server error while contacting central Animus Auth Service';
+    res.status(errorStatus).json({ error: message });
   }
 });
 

@@ -153,16 +153,29 @@ describe('AuthHandler', () => {
   });
 
   it('should clear token from storage', async () => {
-     const storedToken = 'token-to-clear';
-     const expiryTime = Date.now() + 600 * 1000;
-     sessionStorage.setItem(storageKey, storedToken);
-     sessionStorage.setItem(expiryKey, expiryTime.toString());
+     // Define the keys used by the refactored AuthHandler
+     const animusTokenKey = 'animus_sdk_auth_token';
+     const livekitTokenKey = 'animus_sdk_lk_token';
+     const livekitUrlKey = 'animus_sdk_lk_url';
+     const animusExpiryKey = 'animus_sdk_auth_expiry';
+     const livekitExpiryKey = 'animus_sdk_lk_expiry';
+
+     // Set dummy values for all keys
+     sessionStorage.setItem(animusTokenKey, 'dummy-animus-token');
+     sessionStorage.setItem(livekitTokenKey, 'dummy-lk-token');
+     sessionStorage.setItem(livekitUrlKey, 'dummy-lk-url');
+     sessionStorage.setItem(animusExpiryKey, (Date.now() + 600000).toString());
+     sessionStorage.setItem(livekitExpiryKey, (Date.now() + 600000).toString());
 
      const authHandler = new AuthHandler(tokenProviderUrl, 'sessionStorage');
-     authHandler.clearToken();
+     authHandler.clearAllDetails(); // Use the renamed method
 
-     expect(sessionStorage.getItem(storageKey)).toBeNull();
-     expect(sessionStorage.getItem(expiryKey)).toBeNull();
+     // Expect all keys to be removed
+     expect(sessionStorage.getItem(animusTokenKey)).toBeNull();
+     expect(sessionStorage.getItem(livekitTokenKey)).toBeNull();
+     expect(sessionStorage.getItem(livekitUrlKey)).toBeNull();
+     expect(sessionStorage.getItem(animusExpiryKey)).toBeNull();
+     expect(sessionStorage.getItem(livekitExpiryKey)).toBeNull();
      // Also check internal state if needed (though testing public behavior is preferred)
      expect((authHandler as any).currentToken).toBeNull();
      expect((authHandler as any).tokenExpiryTime).toBeNull();

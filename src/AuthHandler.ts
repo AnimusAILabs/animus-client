@@ -1,3 +1,5 @@
+import { jwtDecode } from 'jwt-decode';
+
 /**
  * Simple abstraction for browser storage (localStorage or sessionStorage).
  */
@@ -21,16 +23,38 @@ class TokenStore {
   }
 }
 
-/**
- * Represents the structure of the token response expected from the tokenProviderUrl.
- * Adjust this interface based on the actual response structure of the proxy.
- */
-interface TokenResponse {
-  accessToken: string;
-  /** Expiration time in seconds (e.g., 3600 for 1 hour) or a timestamp. */
-  expiresIn?: number; // Or expiresAt?: number (timestamp)
-  // Add other relevant fields if needed
+/** Decoded JWT payload structure (only need 'exp') */
+interface JwtPayload {
+  exp: number; // Expiration time as a Unix timestamp (seconds)
+  // Other claims ignored
 }
+
+/** Structure for a single LiveKit context (Observer or Voice) */
+interface LiveKitContextDetails {
+    url: string;
+    token: string;
+}
+
+/** Structure expected from the token provider URL */
+interface TokenResponse {
+  animus: {
+    token: string;
+  };
+  livekit: {
+    observer: LiveKitContextDetails;
+    voice: LiveKitContextDetails;
+  };
+}
+
+/** Structure returned by getLiveKitDetails */
+export interface LiveKitDetails {
+    url: string;
+    token: string;
+}
+
+/** Type for the LiveKit context */
+export type LiveKitContext = 'observer' | 'voice';
+
 
 /**
  * Custom error class for authentication failures.
@@ -45,119 +69,270 @@ export class AuthenticationError extends Error {
 }
 
 /**
- * Handles fetching and storing authentication tokens from the provider URL.
+ * Handles fetching, storing, and refreshing authentication tokens (Animus and LiveKit)
+ * from the provider URL by decoding JWT expiry times.
  */
 export class AuthHandler {
   private tokenProviderUrl: string;
   private tokenStore: TokenStore;
-  private currentToken: string | null = null;
-  private tokenExpiryTime: number | null = null; // Store expiry time (timestamp in ms)
-  private readonly storageKey = 'animus_sdk_auth_token';
-  private readonly expiryKey = 'animus_sdk_auth_expiry';
-  private readonly bufferTime = 60 * 1000; // Fetch new token 60 seconds before expiry
+
+  // Store Animus details
+  private animusToken: string | null = null;
+  private animusTokenExpiry: number | null = null; // Expiry time in milliseconds
+
+  // Store LiveKit details separately for each context
+  private livekitObserverToken: string | null = null;
+  private livekitObserverUrl: string | null = null;
+  private livekitObserverExpiry: number | null = null; // Expiry time in milliseconds
+
+  private livekitVoiceToken: string | null = null;
+  private livekitVoiceUrl: string | null = null;
+  private livekitVoiceExpiry: number | null = null; // Expiry time in milliseconds
+
+
+  // Storage keys
+  private readonly animusTokenKey = 'animus_sdk_auth_token';
+  private readonly animusExpiryKey = 'animus_sdk_auth_expiry';
+
+  private readonly livekitObserverTokenKey = 'animus_sdk_lk_obs_token';
+  private readonly livekitObserverUrlKey = 'animus_sdk_lk_obs_url';
+  private readonly livekitObserverExpiryKey = 'animus_sdk_lk_obs_expiry';
+
+  private readonly livekitVoiceTokenKey = 'animus_sdk_lk_voice_token';
+  private readonly livekitVoiceUrlKey = 'animus_sdk_lk_voice_url';
+  private readonly livekitVoiceExpiryKey = 'animus_sdk_lk_voice_expiry';
+
+
+  // Buffer time (fetch token this many milliseconds before actual expiry)
+  private readonly bufferTime = 60 * 1000; // 60 seconds
 
   constructor(tokenProviderUrl: string, storageType: 'localStorage' | 'sessionStorage') {
     this.tokenProviderUrl = tokenProviderUrl;
     this.tokenStore = new TokenStore(storageType);
-    this.loadTokenFromStorage();
+    this.loadDetailsFromStorage();
   }
 
   /**
-   * Loads token and expiry from storage if available.
+   * Loads all details from storage if available.
    */
-  private loadTokenFromStorage(): void {
-    this.currentToken = this.tokenStore.getItem(this.storageKey);
-    const expiry = this.tokenStore.getItem(this.expiryKey);
-    this.tokenExpiryTime = expiry ? parseInt(expiry, 10) : null;
+  private loadDetailsFromStorage(): void {
+    this.animusToken = this.tokenStore.getItem(this.animusTokenKey);
+    const animusExp = this.tokenStore.getItem(this.animusExpiryKey);
+    this.animusTokenExpiry = animusExp ? parseInt(animusExp, 10) : null;
+
+    // Load Observer details
+    this.livekitObserverToken = this.tokenStore.getItem(this.livekitObserverTokenKey);
+    this.livekitObserverUrl = this.tokenStore.getItem(this.livekitObserverUrlKey);
+    const observerExp = this.tokenStore.getItem(this.livekitObserverExpiryKey);
+    this.livekitObserverExpiry = observerExp ? parseInt(observerExp, 10) : null;
+
+    // Load Voice details
+    this.livekitVoiceToken = this.tokenStore.getItem(this.livekitVoiceTokenKey);
+    this.livekitVoiceUrl = this.tokenStore.getItem(this.livekitVoiceUrlKey);
+    const voiceExp = this.tokenStore.getItem(this.livekitVoiceExpiryKey);
+    this.livekitVoiceExpiry = voiceExp ? parseInt(voiceExp, 10) : null;
+
+    console.log('AuthHandler: Loaded details from storage.', {
+        hasAnimusToken: !!this.animusToken,
+        hasLivekitObserverToken: !!this.livekitObserverToken,
+        hasLivekitVoiceToken: !!this.livekitVoiceToken,
+        animusExpires: this.animusTokenExpiry ? new Date(this.animusTokenExpiry).toISOString() : null,
+        observerExpires: this.livekitObserverExpiry ? new Date(this.livekitObserverExpiry).toISOString() : null,
+        voiceExpires: this.livekitVoiceExpiry ? new Date(this.livekitVoiceExpiry).toISOString() : null,
+    });
   }
 
   /**
-   * Fetches a new token from the configured provider URL.
-   * @returns The fetched access token.
-   * @throws {AuthenticationError} If fetching fails.
+   * Fetches new tokens and details from the configured provider URL.
+   * Stores the details and calculated expiry times.
+   * @throws {AuthenticationError} If fetching or processing fails.
    */
-  private async fetchNewToken(): Promise<string> {
+  private async fetchAndStoreDetails(): Promise<void> {
+    console.log('AuthHandler: Fetching new Animus and LiveKit details...');
     try {
-      // Use POST as it's more standard for token endpoints, even if no body is sent by default
+      // Use POST as before, adjust if your endpoint uses GET
       const response = await fetch(this.tokenProviderUrl, {
         method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          // 'Content-Type': 'application/json', // Add if sending a body
-          // Add any other headers required by the token proxy
-        },
-        // body: JSON.stringify({}), // Send empty body or specific data if required by proxy
+        headers: { 'Accept': 'application/json' },
+        // body: JSON.stringify({}) // If needed
       });
 
       if (!response.ok) {
-        let errorBody = 'Failed to fetch token';
-        try {
-          errorBody = await response.text(); // Try to get more details
-        } catch (_) { /* Ignore parsing error */ }
-        throw new AuthenticationError(`Failed to fetch token from provider: ${response.status} ${response.statusText}. ${errorBody}`);
+        let errorBody = 'Failed to fetch details';
+        try { errorBody = await response.text(); } catch (_) { /* Ignore */ }
+        throw new AuthenticationError(`Failed to fetch details from provider: ${response.status} ${response.statusText}. ${errorBody}`);
       }
 
-      const tokenData = await response.json() as TokenResponse;
+      const data = await response.json() as TokenResponse;
 
-      if (!tokenData.accessToken) {
-        throw new AuthenticationError('Invalid token response from provider: missing accessToken');
+      // Validate the structure
+      if (!data.animus?.token ||
+          !data.livekit?.observer?.token || !data.livekit?.observer?.url ||
+          !data.livekit?.voice?.token || !data.livekit?.voice?.url) {
+        console.error("AuthHandler: Invalid response structure received:", data);
+        throw new AuthenticationError('Invalid response from provider: missing required fields (animus.token, livekit.observer.*, livekit.voice.*)');
       }
 
-      this.currentToken = tokenData.accessToken;
-      this.tokenStore.setItem(this.storageKey, this.currentToken);
-
-      // Handle expiry
-      if (tokenData.expiresIn && tokenData.expiresIn > 0) {
-        // Calculate expiry timestamp (now + expiresIn seconds - buffer)
-        this.tokenExpiryTime = Date.now() + (tokenData.expiresIn * 1000) - this.bufferTime;
-        this.tokenStore.setItem(this.expiryKey, this.tokenExpiryTime.toString());
-      } else {
-        // If no expiry provided, clear stored expiry
-        this.tokenExpiryTime = null;
-        this.tokenStore.removeItem(this.expiryKey);
-        console.warn('Token provider did not return expiresIn. Token expiry cannot be managed automatically.');
+      // Decode tokens to get expiry
+      let animusPayload: JwtPayload;
+      let observerPayload: JwtPayload;
+      let voicePayload: JwtPayload;
+      try {
+        animusPayload = jwtDecode<JwtPayload>(data.animus.token);
+        observerPayload = jwtDecode<JwtPayload>(data.livekit.observer.token);
+        voicePayload = jwtDecode<JwtPayload>(data.livekit.voice.token);
+      } catch (decodeError) {
+         console.error("AuthHandler: Error decoding JWT:", decodeError);
+         throw new AuthenticationError(`Invalid token received, failed to decode: ${decodeError instanceof Error ? decodeError.message : String(decodeError)}`);
       }
 
-      return this.currentToken;
+
+      if (!animusPayload.exp || !observerPayload.exp || !voicePayload.exp) {
+          throw new AuthenticationError('Invalid token(s) received: missing exp claim.');
+      }
+
+      // Store Animus details
+      this.animusToken = data.animus.token;
+      this.animusTokenExpiry = (animusPayload.exp * 1000) - this.bufferTime;
+      this.tokenStore.setItem(this.animusTokenKey, this.animusToken);
+      this.tokenStore.setItem(this.animusExpiryKey, this.animusTokenExpiry.toString());
+
+      // Store Observer details
+      this.livekitObserverToken = data.livekit.observer.token;
+      this.livekitObserverUrl = data.livekit.observer.url;
+      this.livekitObserverExpiry = (observerPayload.exp * 1000) - this.bufferTime;
+      this.tokenStore.setItem(this.livekitObserverTokenKey, this.livekitObserverToken);
+      this.tokenStore.setItem(this.livekitObserverUrlKey, this.livekitObserverUrl);
+      this.tokenStore.setItem(this.livekitObserverExpiryKey, this.livekitObserverExpiry.toString());
+
+      // Store Voice details
+      this.livekitVoiceToken = data.livekit.voice.token;
+      this.livekitVoiceUrl = data.livekit.voice.url;
+      this.livekitVoiceExpiry = (voicePayload.exp * 1000) - this.bufferTime;
+      this.tokenStore.setItem(this.livekitVoiceTokenKey, this.livekitVoiceToken);
+      this.tokenStore.setItem(this.livekitVoiceUrlKey, this.livekitVoiceUrl);
+      this.tokenStore.setItem(this.livekitVoiceExpiryKey, this.livekitVoiceExpiry.toString());
+
+
+      console.log('AuthHandler: Successfully fetched and stored new details.', {
+          animusExpires: new Date(this.animusTokenExpiry).toISOString(),
+          observerExpires: new Date(this.livekitObserverExpiry).toISOString(),
+          voiceExpires: new Date(this.livekitVoiceExpiry).toISOString(),
+      });
 
     } catch (error) {
-      this.clearToken(); // Clear potentially invalid token on fetch failure
+      this.clearAllDetails(); // Clear potentially invalid details on fetch failure
       if (error instanceof AuthenticationError) {
         throw error;
       }
-      throw new AuthenticationError(`Network or other error fetching token: ${error instanceof Error ? error.message : String(error)}`);
+      // Wrap other errors (like network issues)
+      throw new AuthenticationError(`Error processing token details: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  /**
-   * Checks if the current token is expired or nearing expiry.
-   */
-  private isTokenExpired(): boolean {
-    if (!this.currentToken) return true; // No token means expired
-    if (!this.tokenExpiryTime) return false; // No expiry info, assume valid (with warning)
-    return Date.now() >= this.tokenExpiryTime;
+  /** Checks if the Animus token is expired or nearing expiry (within buffer). */
+  private isAnimusTokenExpired(): boolean {
+    const expired = !this.animusToken || !this.animusTokenExpiry || Date.now() >= this.animusTokenExpiry;
+    // if (expired) console.log(`AuthHandler: Animus token is expired or missing. Now: ${Date.now()}, Expires: ${this.animusTokenExpiry}`);
+    return expired;
   }
 
+   /** Checks if the LiveKit token for a specific context is expired or nearing expiry (within buffer). */
+   private isLiveKitTokenExpired(context: LiveKitContext): boolean {
+       let token: string | null;
+       let expiry: number | null;
+
+       if (context === 'observer') {
+           token = this.livekitObserverToken;
+           expiry = this.livekitObserverExpiry;
+       } else if (context === 'voice') {
+           token = this.livekitVoiceToken;
+           expiry = this.livekitVoiceExpiry;
+       } else {
+           console.error(`AuthHandler: Invalid LiveKit context provided to isLiveKitTokenExpired: ${context}`);
+           return true; // Treat invalid context as expired
+       }
+
+       const expired = !token || !expiry || Date.now() >= expiry;
+       // if (expired) console.log(`AuthHandler: LiveKit token for ${context} is expired or missing. Now: ${Date.now()}, Expires: ${expiry}`);
+       return expired;
+   }
+
   /**
-   * Retrieves the current valid access token, fetching a new one if necessary.
-   * @returns A valid access token.
+   * Retrieves the current valid Animus access token, fetching new details if necessary.
+   * @returns A valid Animus access token.
    * @throws {AuthenticationError} If a valid token cannot be obtained.
    */
   public async getToken(): Promise<string> {
-    if (!this.currentToken || this.isTokenExpired()) {
-      console.log('Token missing or expired, fetching new token...');
-      return await this.fetchNewToken();
+    if (this.isAnimusTokenExpired()) {
+      console.log('AuthHandler: Animus token expired or missing, refreshing details...');
+      await this.fetchAndStoreDetails(); // Refreshes both tokens
     }
-    return this.currentToken;
+    // After fetching (if needed), the token should be valid and non-null
+    if (!this.animusToken) {
+        // This should ideally not happen if fetchAndStoreDetails succeeded
+        throw new AuthenticationError("AuthHandler: Failed to load or fetch a valid Animus token.");
+    }
+    return this.animusToken;
   }
 
   /**
-   * Clears the stored token and expiry information.
+   * Retrieves the current valid LiveKit URL and token for the specified context,
+   * fetching new details if necessary.
+   * @param context - The LiveKit context ('observer' or 'voice') for which to get details.
+   * @returns An object containing the LiveKit URL and token for the specified context.
+   * @throws {AuthenticationError} If valid details cannot be obtained.
    */
-  public clearToken(): void {
-    this.currentToken = null;
-    this.tokenExpiryTime = null;
-    this.tokenStore.removeItem(this.storageKey);
-    this.tokenStore.removeItem(this.expiryKey);
+  public async getLiveKitDetails(context: LiveKitContext): Promise<LiveKitDetails> {
+      if (this.isLiveKitTokenExpired(context)) {
+          console.log(`AuthHandler: LiveKit token for ${context} expired or missing, refreshing all details...`);
+          await this.fetchAndStoreDetails(); // Refreshes all tokens
+      }
+
+      let url: string | null;
+      let token: string | null;
+
+      if (context === 'observer') {
+          url = this.livekitObserverUrl;
+          token = this.livekitObserverToken;
+      } else if (context === 'voice') {
+          url = this.livekitVoiceUrl;
+          token = this.livekitVoiceToken;
+      } else {
+           // Should not happen if type checking is enforced, but good practice
+          throw new AuthenticationError(`AuthHandler: Invalid LiveKit context requested: ${context}`);
+      }
+
+       // After fetching (if needed), details should be valid and non-null
+      if (!url || !token) {
+           // This should ideally not happen if fetchAndStoreDetails succeeded
+          throw new AuthenticationError(`AuthHandler: Failed to load or fetch valid LiveKit details for context "${context}".`);
+      }
+      return { url, token };
+  }
+
+
+  /**
+   * Clears all stored token and detail information.
+   */
+  public clearAllDetails(): void {
+    console.log('AuthHandler: Clearing all stored details.');
+    this.animusToken = null;
+    this.animusTokenExpiry = null;
+    this.livekitObserverToken = null;
+    this.livekitObserverUrl = null;
+    this.livekitObserverExpiry = null;
+    this.livekitVoiceToken = null;
+    this.livekitVoiceUrl = null;
+    this.livekitVoiceExpiry = null;
+
+    this.tokenStore.removeItem(this.animusTokenKey);
+    this.tokenStore.removeItem(this.animusExpiryKey);
+    this.tokenStore.removeItem(this.livekitObserverTokenKey);
+    this.tokenStore.removeItem(this.livekitObserverUrlKey);
+    this.tokenStore.removeItem(this.livekitObserverExpiryKey);
+    this.tokenStore.removeItem(this.livekitVoiceTokenKey);
+    this.tokenStore.removeItem(this.livekitVoiceUrlKey);
+    this.tokenStore.removeItem(this.livekitVoiceExpiryKey);
   }
 }

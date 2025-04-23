@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "jsonwebtoken": "^9.0.2",
+    "livekit-client": "^2.11.3",
     "ws": "^8.17.1"
   }
 }

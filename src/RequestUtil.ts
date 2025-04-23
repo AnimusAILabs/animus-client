@@ -61,72 +61,90 @@ export class RequestUtil {
     body?: Record<string, any> | null,
     stream: boolean = false // Keep boolean for implementation logic
   ): Promise<T | Response> { // Implementation return type covers both overloads
-    let token: string;
-    try {
-      token = await this.authHandler.getToken();
-    } catch (authError) {
-      // Re-throw AuthenticationError directly
-      if (authError instanceof AuthenticationError) throw authError;
-      // Wrap other errors
-      throw new AuthenticationError(`Failed to get authentication token: ${authError instanceof Error ? authError.message : String(authError)}`);
-    }
+    let attempts = 0;
+    const maxAttempts = 2; // Initial attempt + 1 retry
 
-    const url = `${this.apiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
-    const headers: HeadersInit = {
-      'Authorization': `Bearer ${token}`,
-      'Accept': stream ? 'text/event-stream' : 'application/json',
-    };
+    while (attempts < maxAttempts) {
+      attempts++;
+      let token: string;
+      try {
+        // Get token for the current attempt
+        token = await this.authHandler.getToken();
+      } catch (authError) {
+        // If getting the token fails even on retry, re-throw
+        if (authError instanceof AuthenticationError) throw authError;
+        throw new AuthenticationError(`Failed to get authentication token: ${authError instanceof Error ? authError.message : String(authError)}`);
+      }
 
-    const options: RequestInit = {
-      method: method,
-      headers: headers,
-    };
+      const url = `${this.apiBaseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+      const headers: HeadersInit = {
+        'Authorization': `Bearer ${token}`,
+        'Accept': stream ? 'text/event-stream' : 'application/json',
+      };
 
-    if (body && (method === 'POST' || method === 'PUT')) {
-      headers['Content-Type'] = 'application/json';
-      options.body = JSON.stringify(body);
-    }
+      const options: RequestInit = {
+        method: method,
+        headers: headers,
+      };
 
-    try {
-      const response = await fetch(url, options);
+      if (body && (method === 'POST' || method === 'PUT')) {
+        headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(body);
+      }
 
-      if (!response.ok) {
-        let errorData: any = null;
-        let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
-        try {
-          // Try to parse error details from the response body
-          errorData = await response.json();
-          // If errorData has a specific message field, use it
-          if (errorData && typeof errorData === 'object' && errorData.message) {
-            errorMessage = `API Error (${response.status}): ${errorData.message}`;
-          } else if (errorData && typeof errorData === 'object' && errorData.detail) {
-             errorMessage = `API Error (${response.status}): ${errorData.detail}`;
+      try {
+        console.log(`RequestUtil: Attempt ${attempts} - ${method} ${url}`);
+        const response = await fetch(url, options);
+
+        if (!response.ok) {
+          // Check if it's a 401 error and if we can retry
+          if (response.status === 401 && attempts < maxAttempts) {
+            console.log(`RequestUtil: Attempt ${attempts} failed with 401. Clearing token and retrying...`);
+            this.authHandler.clearAllDetails(); // Clear stored details to force refresh on next getToken()
+            continue; // Go to the next iteration of the loop to retry
           }
-        } catch (_) {
-          // If parsing fails, use the status text
+
+          // If not 401 or if it's the last attempt, handle as final error
+          let errorData: any = null;
+          let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
+          try {
+            errorData = await response.json();
+            if (errorData && typeof errorData === 'object' && errorData.message) {
+              errorMessage = `API Error (${response.status}): ${errorData.message}`;
+            } else if (errorData && typeof errorData === 'object' && errorData.detail) {
+               errorMessage = `API Error (${response.status}): ${errorData.detail}`;
+            }
+          } catch (_) { /* Ignore parsing error */ }
+          throw new ApiError(errorMessage, response.status, errorData);
         }
-        throw new ApiError(errorMessage, response.status, errorData);
-      }
 
-      // For streaming requests, return the raw Response object
-      if (stream) {
-        return response;
-      }
+        // --- Success ---
+        if (stream) {
+          return response;
+        }
+        if (response.status === 204) {
+          return null as T;
+        }
+        return await response.json() as T;
 
-      // For non-streaming, parse and return JSON
-      // Handle cases where the response might be empty (e.g., 204 No Content)
-      if (response.status === 204) {
-        return null as T; // Or return undefined, depending on desired behavior
+      } catch (error) {
+        // If it's an ApiError from the current attempt (e.g., 401 on last attempt, or other non-401 error)
+        if (error instanceof ApiError) {
+            // If it was a 401 on the final attempt, or another API error, throw it
+             if (error.status === 401 && attempts >= maxAttempts) {
+                 console.error(`RequestUtil: Failed with 401 even after retry.`);
+             }
+             throw error;
+        }
+        // Re-throw AuthenticationError if token fetching itself failed within the loop
+        if (error instanceof AuthenticationError) {
+            throw error;
+        }
+        // Wrap unknown errors (network issues, etc.)
+        throw new Error(`Network or unexpected error during API request (Attempt ${attempts}): ${error instanceof Error ? error.message : String(error)}`);
       }
-      return await response.json() as T;
-
-    } catch (error) {
-      // Re-throw known errors
-      if (error instanceof ApiError || error instanceof AuthenticationError) {
-        throw error;
-      }
-      // Wrap unknown errors
-      throw new Error(`Network or unexpected error during API request: ${error instanceof Error ? error.message : String(error)}`);
     }
+    // Should be unreachable if loop logic is correct, but satisfies TypeScript
+    throw new Error("Request failed after maximum attempts.");
   }
 }

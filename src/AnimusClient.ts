@@ -1,4 +1,4 @@
-import { AuthHandler, AuthenticationError } from './AuthHandler';
+import { AuthHandler, AuthenticationError, LiveKitContext } from './AuthHandler';
 import { RequestUtil, ApiError } from './RequestUtil';
 import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk } from './Chat';
 import { MediaModule, MediaCompletionRequest, MediaCompletionResponse, MediaAnalysisRequest, MediaAnalysisResultResponse, MediaAnalysisStatusResponse } from './Media';
@@ -178,13 +178,24 @@ export class AnimusClient {
    * Clears any stored authentication token.
    */
   public clearAuthToken(): void {
-    this.authHandler.clearToken();
+    this.authHandler.clearAllDetails();
     console.log('Cleared stored authentication token.');
   }
 
   // --- Direct access via modules ---
   // Methods like chat.completions and media.analyze are accessed via
   // client.chat.completions(...) and client.media.analyze(...)
+
+  /**
+   * Retrieves the current valid LiveKit URL and token, fetching new details if necessary.
+   * This internally uses the AuthHandler which manages token expiry and refresh for the specified context.
+   * @param context - The LiveKit context ('observer' or 'voice') for which to get details.
+   * @returns An object containing the LiveKit URL and token for the specified context.
+   * @throws {AuthenticationError} If valid details cannot be obtained.
+   */
+  public async getLiveKitDetails(context: LiveKitContext): Promise<import('./AuthHandler').LiveKitDetails> {
+      return this.authHandler.getLiveKitDetails(context);
+  }
 }
 
 // Re-export types from their respective modules

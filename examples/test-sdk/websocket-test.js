@@ -1,146 +1,122 @@
 // examples/test-sdk/websocket-test.js
 
 // Fetches the organization-specific JWT from the generator server
-async function fetchOrgJwtToken(generatorUrl) {
-  try {
-    const response = await fetch(generatorUrl, {
-      // Use POST, as the SDK might, and our example server handles both GET/POST
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        // 'Content-Type': 'application/json' // Not strictly needed if body is empty
-      },
-      // Body is not required by our example /token endpoint, but send empty for POST convention
-      body: JSON.stringify({})
-    });
+// Removed fetchLiveKitDetails - Now using SDK client
 
-    if (!response.ok) {
-      const errorText = await response.text(); // Get error details if possible
-      throw new Error(`Failed to fetch org token: ${response.status} ${response.statusText} - ${errorText}`);
-    }
+// Renamed function to reflect SDK usage
+// examples/test-sdk/websocket-test.js
+// Assumes livekit-client UMD build is loaded globally as LivekitClient
 
-    const data = await response.json();
-    // The example auth server returns { "accessToken": "..." }
-    if (!data.accessToken) {
-        throw new Error('Access token not found in response from client auth server.');
-    }
-    console.log('Successfully fetched JWT access token.');
-    return data.accessToken;
-  } catch (error) {
-    console.error('Error fetching JWT token:', error);
-    throw error; // Re-throw to prevent connection attempt without token
-  }
-}
+// Fetches the organization-specific JWT from the generator server
+// Removed fetchLiveKitDetails - Now using SDK client
 
-async function testWebSocketWithJwt() {
-  const clientAuthServerUrl = 'http://localhost:3001/token'; // URL of our example client auth server
-  // --- IMPORTANT: Replace with the actual Animus Realtime WebSocket endpoint ---
-  const wsUrlBase = 'wss://api.animusai.co/orpheus/ws/audio'; // Use wss:// for secure connection
-  let websocket = null;
+// Renamed function to reflect SDK usage
+async function testLiveKitWebSocketWithSdk() {
+  const clientAuthServerUrl = 'http://localhost:3001/token'; // URL for the SDK's AuthHandler
+  let room = null; // To hold the LiveKit Room instance
+  let client = null; // To hold the Animus SDK client instance
 
   // --- UI Elements (Optional) ---
   const outputElement = document.getElementById('result');
-  if (outputElement) {
-      outputElement.textContent = 'Starting WebSocket test... Check console for details.';
-      outputElement.classList.remove('error');
-  } else {
-      console.log('Starting WebSocket test... Check console for details.');
+  function updateOutput(message, isError = false) {
+      console.log(message);
+      if (outputElement) {
+          outputElement.textContent = message;
+          if (isError) {
+              outputElement.classList.add('error');
+          } else {
+              outputElement.classList.remove('error');
+          }
+      }
   }
+
+  updateOutput('Starting LiveKit SDK connection test...');
 
 
   try {
-    console.log(`Attempting to fetch JWT access token from ${clientAuthServerUrl}...`);
-    const accessToken = await fetchOrgJwtToken(clientAuthServerUrl);
+    // Ensure the global AnimusSDK object exists
+    if (typeof AnimusSDK === 'undefined' || typeof AnimusSDK.AnimusClient === 'undefined') {
+        const errorMsg = 'Error: AnimusSDK or AnimusSDK.AnimusClient not found. Did the SDK load correctly?';
+        updateOutput(errorMsg, true);
+        return;
+    }
+     // Ensure the global LivekitClient object exists
+     if (typeof LivekitClient === 'undefined' || typeof LivekitClient.Room === 'undefined') {
+        const errorMsg = 'Error: LivekitClient or LivekitClient.Room not found. Did you include the livekit-client SDK script in index.html?';
+        updateOutput(errorMsg, true);
+        return;
+    }
 
-    // Append the fetched token as a query parameter named 'token'
-    const wsUrlWithToken = `${wsUrlBase}?token=${encodeURIComponent(accessToken)}`;
-    console.log(`Attempting to connect to WebSocket: ${wsUrlBase} (token will be sent in query)`);
 
-    websocket = new WebSocket(wsUrlWithToken);
+    updateOutput('Initializing AnimusClient to fetch LiveKit details...');
+    // Instantiate the SDK client, providing the token provider URL
+    client = new AnimusSDK.AnimusClient({
+        tokenProviderUrl: clientAuthServerUrl
+        // No chat/vision config needed for this test
+    });
 
-    websocket.onopen = (event) => {
-      console.log('WebSocket connection opened:', event);
-      if (outputElement) outputElement.textContent = 'WebSocket connection opened. Sending config...';
+    updateOutput(`Attempting to fetch LiveKit 'observer' details via SDK client...`);
+    // Use the SDK client to get LiveKit details for the 'observer' context
+    const livekitDetails = await client.getLiveKitDetails('observer'); // Fetch { url, token }
 
+    updateOutput(`LiveKit 'observer' details obtained. URL: ${livekitDetails.url}`);
 
-      // Send configuration message (similar to Python example)
-      const configPayload = {
-        type: "config",
-        model: "orpheus", // Example value, adjust if needed
-        speed: 1.0       // Example value, adjust if needed
-      };
-      console.log('Sending config message:', configPayload);
-      websocket.send(JSON.stringify(configPayload));
+    // --- LiveKit Connection using livekit-client SDK ---
+    updateOutput('Creating LiveKit Room instance...');
+    room = new LivekitClient.Room();
 
-      // Example: Send a complete message after a short delay
-      setTimeout(() => {
-        const completeMessage = { type: "complete" };
-        console.log('Sending complete message:', completeMessage);
-        websocket.send(JSON.stringify(completeMessage));
-         if (outputElement) outputElement.textContent = 'Sent config and complete messages. Waiting for responses...';
-      }, 2000); // Send complete after 2 seconds
-    };
+    // Setup event listeners
+    room.on(LivekitClient.RoomEvent.Connected, () => {
+        updateOutput('Successfully connected to LiveKit room!');
+        // Test successful, disconnect after a short delay
+        setTimeout(() => {
+            updateOutput('Disconnecting from LiveKit room...');
+            room.disconnect();
+        }, 3000); // Disconnect after 3 seconds
+    });
 
-    websocket.onmessage = (event) => {
-      console.log('WebSocket message received:', event.data);
-       if (outputElement) outputElement.textContent = `Received message: ${event.data}`;
-      try {
-        const data = JSON.parse(event.data);
-        console.log('Parsed message data:', data);
-        // Handle different message types if needed
-        if (data.type === 'transcription') {
-          console.log(`Transcription (${data.is_final ? 'Final' : 'Partial'}): ${data.text}`);
-           if (outputElement) outputElement.textContent = `Transcription: ${data.text}`;
-        } else if (data.error) {
-           console.error('WebSocket server error:', data.error);
-            if (outputElement) {
-                 outputElement.textContent = `WebSocket server error: ${data.error}`;
-                 outputElement.classList.add('error');
-            }
-        }
-      } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
-         if (outputElement) {
-             outputElement.textContent = `Failed to parse message: ${event.data}`;
-             outputElement.classList.add('error');
-         }
-      }
-    };
+    room.on(LivekitClient.RoomEvent.Disconnected, (reason) => {
+        updateOutput(`Disconnected from LiveKit room. Reason: ${reason || 'N/A'}`);
+        room = null; // Clean up
+    });
 
-    websocket.onerror = (event) => {
-      console.error('WebSocket error:', event);
-       if (outputElement) {
-           outputElement.textContent = 'WebSocket error occurred. See console.';
-           outputElement.classList.add('error');
-       }
-    };
+     room.on(LivekitClient.RoomEvent.SignalConnected, () => {
+        updateOutput('LiveKit signal connection established.');
+        // This is often the point where you know the initial handshake worked,
+        // even before the full RoomEvent.Connected fires.
+    });
 
-    websocket.onclose = (event) => {
-      console.log('WebSocket connection closed:', event.code, event.reason);
-      let closeMessage = `WebSocket connection closed. Code: ${event.code}, Reason: ${event.reason || 'N/A'}.`;
-      if (event.wasClean) {
-        console.log('Connection closed cleanly.');
-        closeMessage += ' (Clean)';
-      } else {
-        console.error('Connection died unexpectedly.');
-         closeMessage += ' (Unclean)';
-      }
-       if (outputElement) outputElement.textContent = closeMessage;
-    };
+    // Attempt to connect
+    updateOutput(`Attempting to connect to LiveKit room: ${livekitDetails.url}`);
+    await room.connect(livekitDetails.url, livekitDetails.token, {
+        // Optional: Connection options
+        // autoSubscribe: false // Example: Don't automatically subscribe to tracks
+    });
+    updateOutput('Connection attempt initiated...');
+
 
   } catch (error) {
-    console.error('Failed to initiate WebSocket test:', error);
-     if (outputElement) {
-         outputElement.textContent = `Failed to initiate test: ${error.message}`;
-         outputElement.classList.add('error');
-     }
-    if (websocket && websocket.readyState !== WebSocket.CLOSED) {
-      websocket.close();
+    console.error('Failed to initiate LiveKit connection test:', error);
+    let errorMsg = `Failed to initiate test: ${error.message}`;
+    if (error.message && error.message.includes('connect')) {
+        errorMsg += ' (Check LiveKit URL/token and server status)';
+    }
+    updateOutput(errorMsg, true);
+
+    // Attempt to clean up if room was partially initialized
+    if (room) {
+      try {
+        await room.disconnect(true); // Force disconnect
+        updateOutput('Cleaned up potentially lingering room connection.');
+      } catch (disconnectError) {
+        console.error('Error during cleanup disconnect:', disconnectError);
+      }
+      room = null;
     }
   }
 }
 
-// Expose the function to be called from HTML
-window.testOrgWebSocket = testWebSocketWithJwt; // Rename function for clarity if called from HTML
+// Expose the new function name to be called from HTML
+window.testLiveKitWebSocketWithSdk = testLiveKitWebSocketWithSdk;
 
-console.log('websocket-test.js loaded. Call testOrgWebSocket() to start the test.');
+console.log('websocket-test.js loaded. Call testLiveKitWebSocketWithSdk() to start the test.');
