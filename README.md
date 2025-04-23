@@ -26,20 +26,21 @@ yarn add animus-client
 
 ## Prerequisites: Secure Token Endpoint
 
-**Important:** To maintain security, this SDK does **not** handle your `clientSecret` directly in the browser. You **must** create a secure backend endpoint (a "Token Provider Endpoint") that:
-
-1.  Securely stores your Animus `clientId` and `clientSecret`.
-2.  Receives a request from this SDK (via the `tokenProviderUrl` option).
-3.  Uses your credentials to generate or obtain a valid Animus JWT access token.
-4.  Returns the access token and its expiry time (in seconds) to the SDK in a JSON format like:
+**Important:** To maintain security, this SDK does **not** handle your organization's Animus API key directly in the browser. You **must** create a secure backend endpoint (referred to as the `tokenProviderUrl` in the SDK configuration) that:
+ 
+1.  Securely stores your organization's unique **Animus API key**.
+2.  Receives a request from this SDK. (Your backend might perform its own user authentication here).
+3.  Calls the central **Animus Auth Service** (`https://api.animusai.co/auth/generate-token`) using your stored Animus API key in the `apikey` header.
+4.  Receives the JWT from the Animus Auth Service.
+5.  Returns *only* the received JWT to the SDK in a JSON format like:
    ```json
    {
-     "accessToken": "your_generated_access_token",
-     "expiresIn": 3600 // Example: 1 hour
+     "accessToken": "jwt_token_received_from_animus"
    }
    ```
-
-An example Node.js/Express implementation demonstrating **only the secure token provisioning** part can be found in the `/examples/auth-server` directory of this repository.
+   *(The token's expiry is included within the JWT payload itself (`exp` claim) and is handled internally by the SDK).*
+ 
+An example Node.js/Express implementation demonstrating how this backend endpoint can securely call the central Animus Auth Service is provided in the `/examples/auth-server` directory of this repository. This example acts as a secure intermediary.
 
 ## Usage
 
