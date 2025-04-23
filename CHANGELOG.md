@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/AnimusAILabs/animus-client/compare/v1.1.0...v1.2.0) (2025-04-23)
+
+
+### Features
+
+* JWT auth updates + adding more chat tests ([5736508](https://github.com/AnimusAILabs/animus-client/commit/5736508c13601a082932ab6592ccd3f27abfdef7))
+
 # [1.1.0](https://github.com/AnimusAILabs/animus-client/compare/v1.0.0...v1.1.0) (2025-04-21)
 
 
