@@ -53,6 +53,8 @@
     "dist"
   ],
   "dependencies": {
-    "jwt-decode": "^4.0.0"
+    "eventemitter3": "^5.0.1",
+    "jwt-decode": "^4.0.0",
+    "livekit-client": "^2.11.3"
   }
 }

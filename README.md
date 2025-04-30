@@ -15,6 +15,8 @@ This SDK simplifies authentication and provides convenient methods for accessing
 *   Methods for Media Analysis (Vision), including polling for video results.
 *   Typed interfaces for requests and responses (TypeScript).
 *   Configurable token storage (`sessionStorage` or `localStorage`).
+*   Optional real-time communication via LiveKit Observer for low-latency streaming.
+*   Automatic extraction of `<think>...</think>` blocks from assistant messages into a `reasoning` field for cleaner history and UI flexibility.
 
 ## Installation
 
@@ -203,12 +205,26 @@ const client = new AnimusClient({
 *   `vision` (optional, `AnimusVisionOptions`): If provided, enables vision features and sets defaults.
     *   `model` (**required** if `vision` provided, `string`): Default model for vision requests.
     *   `temperature` (optional, `number`): Default temperature for vision *completion* requests.
+*   `observer` (optional, `AnimusObserverOptions`): Configures the LiveKit Observer connection for real-time communication.
+    *   `enabled` (**required** if `observer` provided, `boolean`): Set to `true` to enable the observer feature.
 
 ---
 
 ### 2. Chat (`client.chat`)
 
 Interact with chat models. Accessed via `client.chat`. Requires `chat` options to be configured during client initialization.
+
+**ChatMessage Interface:**
+
+```typescript
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string; // The displayable content of the message
+  name?: string;
+  reasoning?: string; // Content extracted from the first <think>...</think> block (if any)
+}
+```
+*   **Note on `reasoning`:** If an assistant message contains `<think>...</think>` tags, the SDK automatically extracts the content of the *first* block into the `reasoning` field and removes the block (including tags) from the `content` field before storing it in history. This `reasoning` field is *not* sent back to the API in subsequent requests, helping to manage context window size.
 
 **a) Simple Send (`client.chat.send`)**
 
@@ -234,7 +250,7 @@ try {
   else console.error("Error:", error);
 }
 ```
-*   **Note:** `send()` does not support streaming.
+*   **Note:** If the LiveKit Observer is enabled and connected (see Section 5), `send()` will route the message through the observer. In this case, the `send()` method will return `undefined` immediately, and the response chunks/completion will arrive via the `observerMessage` and `observerStreamComplete` events. History (including reasoning extraction) is updated automatically when the stream completes. If the observer is not connected, `send()` falls back to standard HTTP request/response and does *not* support streaming via this method.
 
 **b) Full Completions (`client.chat.completions`)**
 
@@ -259,23 +275,82 @@ try {
   console.log("AI Poem:", response.choices[0].message.content);
 } catch (error) { /* ... */ }
 
-// Streaming:
+// Streaming (Event-based):
+// Set up event listeners first
+client.on('streamChunk', (data) => {
+  // Process each chunk
+  if (data.deltaContent) {
+    process.stdout.write(data.deltaContent);
+  }
+  
+  // Check for compliance violations in real-time
+  if (data.compliance_violations && data.compliance_violations.length > 0) {
+    console.warn("Compliance issue detected:", data.compliance_violations);
+    // Handle accordingly...
+  }
+});
+
+client.on('streamComplete', (data) => {
+  console.log("\nStream complete!");
+  console.log("Final content:", data.fullContent);
+  // Check final compliance status
+  if (data.compliance_violations) {
+    console.warn("Final compliance status:", data.compliance_violations);
+  }
+});
+
+client.on('streamError', (data) => {
+  console.error("Stream error:", data.error);
+});
+
+// Start the stream - this doesn't return content directly
+// Instead, it triggers the events above
 try {
-  const stream = await client.chat.completions({
+  await client.chat.completions({
     messages: messages,
     stream: true // Enable streaming
-    // Can also override model, temperature etc. here
   });
-
-  console.log("AI Streaming Poem:");
-  for await (const chunk of stream) {
-    process.stdout.write(chunk.choices[0]?.delta?.content || '');
-  }
-  console.log("\n(Stream complete)");
 } catch (error) { /* ... */ }
 ```
 
-*   **Key Types:** `ChatMessage`, `ChatCompletionRequest`, `ChatCompletionResponse`, `ChatCompletionChunk`.
+*   **Key Types:** `ChatMessage` (see above), `ChatCompletionRequest`, `ChatCompletionResponse`, `ChatCompletionChunk`.
+*   **History & Reasoning:** When `historySize` > 0, the SDK automatically includes previous messages (excluding the `reasoning` field) in the request. When processing responses (streaming or non-streaming), `<think>` tags are extracted into the `reasoning` field before the message is added to history.
+
+**c) Chat History Management**
+
+The SDK provides methods to manipulate the conversation history directly, allowing UIs to stay in sync with the SDK's internal state:
+
+```typescript
+// Get copy of current chat history
+const history = client.chat.getChatHistory();
+console.log(`Current chat has ${history.length} messages`);
+
+// Replace entire history (e.g. when loading a saved conversation)
+// Second parameter (validate) is optional, defaults to true
+const importCount = client.chat.setChatHistory(savedConversation, true);
+console.log(`Imported ${importCount} messages`);
+
+// Update a specific message
+const updateSuccess = client.chat.updateHistoryMessage(2, {
+  content: "Updated content",
+  name: "CustomName"
+});
+
+// Delete a specific message
+const deleteSuccess = client.chat.deleteHistoryMessage(3);
+
+// Clear all history
+const clearedCount = client.chat.clearChatHistory();
+console.log(`Cleared ${clearedCount} messages`);
+```
+
+These methods enable several powerful UI features:
+- Loading saved conversations from external storage
+- Editing message content displayed in the UI while keeping the SDK in sync
+- Removing specific messages from the conversation
+- "Forgetting" the entire conversation history
+
+When updating assistant messages that contain `<think>...</think>` tags, the SDK automatically processes them to extract reasoning, just like it does for new messages.
 
 ---
 
@@ -285,10 +360,24 @@ The Animus API integrates content moderation directly into the chat completions 
 
 *   **Enabling:** Set `compliance: true` in the `AnimusChatOptions` during client initialization (this is the default) or within a specific `client.chat.completions` or `client.chat.send` request.
 *   **Disabling:** Set `compliance: false` to bypass moderation checks.
-*   **Response:** When enabled and violations are detected, the `ChatCompletionResponse` object will contain a `compliance_violations` field, which is an array of strings indicating the detected categories (e.g., `["drug_use", "gore"]`).
+*   **Response:** When enabled and violations are detected, the response will include a `compliance_violations` field, which is an array of strings indicating the detected categories (e.g., `["drug_use", "gore"]`).
+
+**Note:** Content moderation (`compliance: true`) is currently **only supported for non-streaming requests** (`stream: false`). Streaming requests will ignore the `compliance` flag, and no `compliance_violations` will be returned via stream events.
+
+#### Non-streaming Compliance Detection
+
+For non-streaming responses (`stream: false`), check the `compliance_violations` field in the response object:
 
 ```typescript
-const response = await client.chat.send("Some potentially non-compliant text.");
+const response = await client.chat.send("Some potentially non-compliant text."); // send() is always non-streaming
+
+// Or using completions:
+// const response = await client.chat.completions({
+//   messages: [{ role: 'user', content: 'Some potentially non-compliant text.' }],
+//   stream: false, // Ensure stream is false
+//   compliance: true // Ensure compliance is true
+// });
+
 
 if (response.compliance_violations && response.compliance_violations.length > 0) {
   console.warn("Content violations detected:", response.compliance_violations);
@@ -298,6 +387,14 @@ if (response.compliance_violations && response.compliance_violations.length > 0)
   console.log("AI:", response.choices[0].message.content);
 }
 ```
+
+#### Automatic History Management
+
+The SDK automatically handles compliance violations for chat history:
+
+* Responses with compliance violations are not added to the internal conversation history
+* This prevents problematic content from being included in the context window for future requests
+* No additional code is required for this behavior
 
 *   **Violation Categories:** The system can detect categories such as `pedophilia`, `beastiality`, `murder`, `rape`, `incest`, `gore`, `prostitution`, and `drug_use`.
 *   **Best Practices:**
@@ -390,6 +487,202 @@ Manually clear the stored authentication token.
 
 ```typescript
 client.clearAuthToken();
+```
+
+---
+
+### 5. LiveKit Observer (Real-time Communication)
+
+The SDK includes optional support for real-time, low-latency communication with compatible Animus agents using LiveKit. This is primarily used for streaming responses back to the client efficiently.
+
+**a) Enabling the Observer**
+
+To enable the observer, provide the `observer` configuration object with `enabled: true` during client initialization:
+
+```typescript
+const client = new AnimusClient({
+  tokenProviderUrl: '...',
+  chat: { /* ... */ },
+  observer: {
+    enabled: true
+  }
+});
+```
+
+**b) Manual Connection & Disconnection**
+
+Unlike other features, the observer connection **must be initiated manually** after the client is created.
+
+```typescript
+async function connectAndSetupObserver() {
+  if (!client.options.observer?.enabled) return; // Check if enabled
+
+  try {
+    console.log("Connecting observer...");
+    await client.connectObserverManually();
+    console.log("Observer connection initiated successfully.");
+    // Setup event listeners now or after the 'observerConnected' event fires
+  } catch (error) {
+    console.error("Failed to connect observer:", error);
+  }
+}
+
+async function disconnectObserver() {
+   if (!client.options.observer?.enabled) return;
+
+   try {
+     console.log("Disconnecting observer...");
+     await client.disconnectObserverManually();
+     console.log("Observer disconnected.");
+   } catch (error) {
+     console.error("Failed to disconnect observer:", error);
+   }
+}
+
+// Example usage:
+// connectAndSetupObserver();
+// Later...
+// disconnectObserver();
+```
+
+**c) Streaming Events**
+
+The `AnimusClient` instance is an `EventEmitter` that emits events for both Observer connections and streaming data.
+
+*Unified Streaming Events (for both HTTP API and Observer):*
+
+*   `streamChunk`: Fired for each content chunk received from either the HTTP API or Observer stream. Contains:
+    * `source`: Either `'observer'` or `'http'` to identify the source
+    * `chunk`: The raw chunk object
+    * `deltaContent`: The content delta from this chunk (if any)
+    * `compliance_violations`: Any compliance violations detected in the stream
+    
+*   `streamComplete`: Fired when a stream successfully completes. Contains:
+    * `source`: Either `'observer'` or `'http'` to identify the source
+    * `fullContent`: The complete aggregated content
+    * `usage`: Final usage statistics if available
+    * `compliance_violations`: Final compliance violations status
+    
+*   `streamError`: Fired when a stream encounters an error. Contains:
+    * `source`: Either `'observer'` or `'http'` to identify the source
+    * `error`: The error message
+
+*Observer Connection Events:*
+
+*   `observerConnecting`: Fired when the Observer connection attempt begins.
+*   `observerConnected`: Fired when the Observer connection is successfully established.
+*   `observerDisconnected`: Fired when the Observer connection is lost or closed.
+*   `observerReconnecting`: Fired when attempting to automatically reconnect.
+*   `observerReconnected`: Fired when successfully reconnected.
+*   `observerError`: Fired when a connection-related error occurs.
+
+**Note:** Streaming (both HTTP and Observer) now uses the same event-based interface. Set up listeners for the unified events and call `client.chat.completions({ stream: true, ... })` to start the stream.
+
+**d) Handling Streaming Responses (UI Example)**
+
+Here's a basic example of how a UI might accumulate streamed chat responses using the unified streaming events. Note that history management (including reasoning extraction and compliance checks) happens automatically within the SDK.
+
+```typescript
+let currentAssistantMessageElement = null; // Reference to the UI element being updated
+let hasComplianceViolations = false; // Track if the current stream has violations
+
+// Set up event listeners for the unified streaming events
+client.on('streamChunk', (data) => {
+  console.log('Received stream chunk:', data);
+
+  // Check for compliance violations
+  if (data.compliance_violations && data.compliance_violations.length > 0) {
+    hasComplianceViolations = true;
+    console.warn(`Compliance violation detected: ${data.compliance_violations.join(', ')}`);
+    
+    // You might want to handle this by:
+    if (currentAssistantMessageElement) {
+      currentAssistantMessageElement.classList.add('compliance-warning');
+      // Add a visual indicator
+      const warningIcon = document.createElement('span');
+      warningIcon.className = 'warning-icon';
+      warningIcon.textContent = '⚠️ ';
+      currentAssistantMessageElement.prepend(warningIcon);
+    }
+  }
+
+  // Process content delta if present
+  if (data.deltaContent) {
+    if (!currentAssistantMessageElement) {
+      // First chunk with content - create the UI element
+      currentAssistantMessageElement = createNewAssistantBubble(); // Your UI function
+      console.log("Starting new response display...");
+    }
+    
+    // Continue to display content even if compliance issues were detected
+    // (or you could choose not to display content with violations)
+    currentAssistantMessageElement.textContent += data.deltaContent;
+    // Scroll UI if needed
+  }
+});
+
+client.on('streamComplete', (data) => {
+  console.log(`Stream complete from ${data.source}`);
+  
+  // Final check for compliance
+  if (data.compliance_violations && data.compliance_violations.length > 0) {
+    console.warn(`Final compliance status: Violations detected: ${data.compliance_violations.join(', ')}`);
+    // Ensure UI shows warning
+    if (currentAssistantMessageElement) {
+      const warningElement = document.createElement('div');
+      warningElement.className = 'compliance-notice';
+      warningElement.textContent = `Content flagged for: ${data.compliance_violations.join(', ')}`;
+      currentAssistantMessageElement.appendChild(warningElement);
+    }
+  }
+  
+  // Finalize the UI message bubble (e.g., remove 'streaming' indicator)
+  if (currentAssistantMessageElement) {
+    currentAssistantMessageElement.classList.remove('streaming');
+    currentAssistantMessageElement.classList.add('complete');
+  }
+  
+  currentAssistantMessageElement = null; // Reset UI element tracker
+  hasComplianceViolations = false; // Reset for next stream
+  // Re-enable UI input, etc.
+});
+
+client.on('streamError', (data) => {
+  console.error(`Stream error (${data.source}): ${data.error}`);
+  
+  // Handle error in UI
+  if (currentAssistantMessageElement) {
+    currentAssistantMessageElement.textContent += `\n--- ERROR: ${data.error} ---`;
+    currentAssistantMessageElement.classList.add('error'); // Example style
+  }
+  
+  // Reset state
+  currentAssistantMessageElement = null;
+  hasComplianceViolations = false;
+  // Re-enable UI input, etc.
+});
+
+// Connection event handling for Observer
+client.on('observerConnected', () => {
+  console.log("Observer connected! Ready for real-time messages.");
+  // Enable UI elements that depend on the observer connection
+});
+
+client.on('observerDisconnected', () => {
+  console.log("Observer disconnected");
+  // Disable UI elements, reset streaming state if necessary
+  currentAssistantMessageElement = null;
+});
+
+// Remember to call connectObserverManually() to start the observer connection!
+
+function createNewAssistantBubble() {
+    // Your implementation to add a new message element to the chat UI
+    const bubble = document.createElement('div');
+    bubble.className = 'assistant-message streaming';
+    document.getElementById('chat-container').appendChild(bubble);
+    return bubble;
+}
 ```
 
 ---

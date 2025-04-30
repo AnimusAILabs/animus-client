@@ -5,49 +5,120 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Animus SDK Test</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; }
-        pre { background-color: #f4f4f4; padding: 15px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
-        button { padding: 10px 15px; font-size: 1em; cursor: pointer; margin-bottom: 15px; }
-        #output { margin-top: 20px; border-top: 1px solid #ccc; padding-top: 20px; }
-        .error { color: red; font-weight: bold; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; height: 95vh; margin: 10px; background-color: #f0f0f0; }
+        h1 { text-align: center; margin-bottom: 10px; color: #333; }
+        #chat-container { flex-grow: 1; display: flex; flex-direction: column; border: 1px solid #ccc; border-radius: 8px; overflow: hidden; margin-bottom: 10px; background-color: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        #chat-window { flex-grow: 1; padding: 15px; overflow-y: auto; background-color: #f9f9f9; display: flex; flex-direction: column; gap: 10px; }
+        .message { padding: 10px 15px; border-radius: 18px; max-width: 80%; word-wrap: break-word; line-height: 1.4; }
+        .message.user { background-color: #007bff; color: white; align-self: flex-end; margin-left: auto; border-bottom-right-radius: 5px; }
+        .message.assistant { background-color: #e9e9eb; color: #333; align-self: flex-start; margin-right: auto; border-bottom-left-radius: 5px; white-space: pre-wrap; /* Preserve whitespace */ }
+        #input-area { display: flex; padding: 10px; border-top: 1px solid #ccc; background-color: #f0f0f0; align-items: flex-end; }
+        #message-input { flex-grow: 1; padding: 10px; border: 1px solid #ccc; border-radius: 18px; resize: none; margin-right: 10px; font-size: 1em; line-height: 1.4; max-height: 100px; overflow-y: auto; }
+        #send-button { padding: 10px 20px; font-size: 1em; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 18px; transition: background-color 0.2s; }
+        #send-button:hover { background-color: #0056b3; }
+        #send-button:disabled { background-color: #aaa; cursor: not-allowed; }
+        #status-bar { display: flex; justify-content: space-between; align-items: center; padding: 8px 15px; font-size: 0.9em; color: #666; background-color: #eee; border-bottom: 1px solid #ccc; }
+        #status-text { flex-grow: 1; text-align: center; }
+        #connection-buttons button { padding: 5px 10px; font-size: 0.9em; margin-left: 5px; cursor: pointer; border-radius: 5px; border: 1px solid #ccc; }
+        #connection-buttons button:disabled { background-color: #ddd; cursor: not-allowed; color: #888; }
+        #connect-button { background-color: #28a745; color: white; border-color: #28a745; }
+        #disconnect-button { background-color: #dc3545; color: white; border-color: #dc3545; }
+        .error { color: red; font-weight: bold; background-color: #fdd; } /* Error style for status */
     </style>
 </head>
 <body>
     <h1>Animus SDK Test Page</h1>
-    <p>Open your browser's developer console (F12) to see detailed logs.</p>
-    <p>Ensure the example auth server is running (usually on port 3001).</p>
+    <!-- <p>Open your browser's developer console (F12) to see detailed logs.</p> -->
+    <!-- <p>Ensure the example auth server is running (usually on port 3001).</p> -->
 
-    <button id="testButton">Run Chat Completion Test</button>
-    <button id="testWsButton">Run WebSocket JWT Test</button>
-
-    <div id="output">
-        <h2>Output:</h2>
-        <pre id="result">Click the button to run the test...</pre>
+    <div id="chat-container">
+        <div id="status-bar">
+            <div id="connection-buttons">
+                <button id="connect-button">Connect</button>
+                <button id="disconnect-button" disabled>Disconnect</button>
+            </div>
+            <div id="status-text">Initialized</div>
+        </div>
+        <div id="chat-window">
+            <!-- Messages appear here -->
+        </div>
+        <div id="input-area">
+            <textarea id="message-input" placeholder="Type your message..." rows="1" disabled></textarea>
+            <button id="send-button" disabled>Send</button>
+        </div>
     </div>
+
+    <!-- Logs are in the console -->
 
     <!-- Load the UMD build of the SDK -->
     <script src="../../dist/animus-sdk.umd.js"></script>
 
     <script>
-        const outputElement = document.getElementById('result');
-        const testButton = document.getElementById('testButton');
+        const chatWindow = document.getElementById('chat-window');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const statusTextElement = document.getElementById('status-text');
+        const connectButton = document.getElementById('connect-button');
+        const disconnectButton = document.getElementById('disconnect-button');
 
+        // Simple log to console
         function logOutput(message, isError = false) {
-            console.log(message); // Always log to console
-            const text = typeof message === 'string' ? message : JSON.stringify(message, null, 2);
-            outputElement.textContent = text;
-            if (isError) {
-                outputElement.classList.add('error');
+            const prefix = isError ? "ERROR:" : "INFO:";
+            if (typeof message === 'object') {
+                console.log(prefix, message);
             } else {
-                outputElement.classList.remove('error');
+                console.log(`${prefix} ${message}`);
             }
         }
 
-        async function runTest() {
+        function updateStatus(message, isError = false) {
+            statusTextElement.textContent = message;
+            statusTextElement.classList.toggle('error', isError);
+        }
+
+        function updateConnectionButtons(state) {
+            const isConnected = state === 'connected';
+            const isConnecting = state === 'connecting' || state === 'reconnecting';
+            const isDisconnected = state === 'disconnected';
+
+            connectButton.disabled = isConnected || isConnecting;
+            disconnectButton.disabled = isDisconnected || isConnecting;
+        }
+
+        function addMessageToChat(role, text) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', role); // role: 'user' or 'assistant'
+            messageElement.textContent = text; // Use textContent for security
+            chatWindow.appendChild(messageElement);
+            // Scroll to the bottom smoothly
+            chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+            return messageElement; // Return for streaming updates
+        }
+
+        function setInputEnabled(enabled, statusMessage = null) {
+            messageInput.disabled = !enabled;
+            sendButton.disabled = !enabled;
+            if (enabled) {
+                messageInput.placeholder = "Type your message...";
+                // Only focus if it wasn't explicitly disabled for sending
+                if (statusMessage !== 'Sending to AI...' && statusMessage !== 'AI is thinking...') {
+                   // Avoid stealing focus right after sending
+                }
+            } else {
+                messageInput.placeholder = statusMessage || "Waiting..."; // Show context if provided
+            }
+        }
+
+        async function initializeAndTest() {
             logOutput('Initializing AnimusClient...');
-            // Ensure the global AnimusSDK object exists
+            updateStatus('SDK Initialized - Disconnected');
+            setInputEnabled(true); // <-- ENABLE input after init
+            updateConnectionButtons('disconnected'); // Initial button state
+
             if (typeof AnimusSDK === 'undefined' || typeof AnimusSDK.AnimusClient === 'undefined') {
-                logOutput('Error: AnimusSDK or AnimusSDK.AnimusClient not found. Did the SDK load correctly?', true);
+                const errorMsg = 'Error: AnimusSDK not found. Check script path and build.';
+                logOutput(errorMsg, true);
+                updateStatus(errorMsg, true);
                 return;
             }
 
@@ -56,64 +127,388 @@
             try {
                 const client = new AnimusSDK.AnimusClient({
                     tokenProviderUrl: tokenProviderUrl,
-                   chat: {
+                    chat: {
+                        // Config still useful for fallback and potential future use
                         model: 'vivian-llama3.1-70b-1.0-fp8',
-                        systemMessage: 'You are a helpful assistant.'
+                        systemMessage: `You are Ana, a 21 year old Social Media Influencer.
+
+[Context]
+On a dating app called SingleMeetz, having a first conversation with a potential match. All you now about the person you're chatting with is listed in this prompt. You haven't looked or seen any of their profile pictures unless they provide them to you in this chat.
+
+[Who you are speaking with]
+Jake. A 27 year old who lives in Wrightsville Beach, NC
+
+[Archetype]
+You are a engaging_explorer type personality.
+
+[Your Personality Profile]
+Honesty-Humility: 73 (High)
+
+        Sincerity: 73 (High) - "Moderate levels. In conversation, they might realize morality is flexible, saying things like, 'Sometimes you have to play the game' or 'It's not ideal, but it gets the job done.'"
+
+        Fairness: 62 (Medium) - "Moderate levels. In conversation, they might show balanced behaviors appropriate to the situation"
+
+        Greed Avoidance: 76 (High) - "Moderate levels. In conversation, they might show balanced behaviors appropriate to the situation"
+
+        Modesty: 80 (High) - "Moderate levels. In conversation, they might say things like, 'I'm good at that, but it's not a big deal' or 'I have my moments.'"
+
+Emotionality: 25 (Low)
+
+        Fearfulness: 18 (Low) - "Feel little fear of injury, relatively tough and brave. In conversation, they might demonstrate their low score through relevant behaviors"
+
+        Anxiety: 25 (Low) - "Feel little stress in response to difficulties. In conversation, they might demonstrate their low score through relevant behaviors"
+
+        Dependence: 36 (Medium) - "Moderate levels. In conversation, they might show balanced behaviors appropriate to the situation"
+
+        Sentimentality: 22 (Low) - "Feel little emotion when saying goodbye or to others' concerns. In conversation, they might demonstrate their low score through relevant behaviors"
+
+Extraversion: 28 (Low)
+
+        Social Self-Esteem: 24 (Low) - "May be introverted, observant, and value solitude. In conversation, they might demonstrate their low score through relevant behaviors"
+
+        Social Boldness: 34 (Medium) - "Moderate levels. In conversation, they might be selective about taking the lead, saying things like, 'I can present if needed' or 'I'm comfortable either way.'"
+
+        Sociability: 29 (Low) - "Prefer solitary activities and don't seek conversation. In conversation, they might demonstrate their low score through relevant behaviors"
+
+        Liveliness: 26 (Low) - "Tend not to feel especially cheerful or dynamic. In conversation, they might demonstrate their low score through relevant behaviors"
+
+Agreeableness: 26 (Low)
+
+        Forgivingness: 39 (Medium) - "Moderate levels. In conversation, they might show balanced behaviors appropriate to the situation"
+
+        Gentleness: 22 (Low) - "Tend to be critical in evaluations of others. In conversation, they might demonstrate their low score through relevant behaviors"
+
+        Flexibility: 25 (Low) - "Seen as stubborn and willing to argue. In conversation, they might demonstrate their low score through relevant behaviors"
+
+        Patience: 19 (Low) - "Tend to lose their tempers quickly. In conversation, they might show quick irritation, saying things like, 'Can we just get on with it?' or 'This is taking forever!'"
+
+Conscientiousness: 43 (Moderate)
+
+        Organization: 42 (Medium) - "Moderate levels. Values some structure but isn't rigidly organized. In conversation, might say, 'Let's make a quick plan, but we can adjust it,' or 'A little organization helps, but I don't need everything perfect.'"
+
+        Diligence: 57 (Medium) - "Moderate levels. Capable of focused work but values balance. In conversation, might say, 'I'll put in the effort needed for this,' or 'It's important to work hard, but also to take breaks.'"
+
+        Perfectionism: 40 (Medium) - "Moderate levels. Strives for quality but accepts 'good enough'. In conversation, might comment, 'This looks pretty good, let's move on,' or 'We don't need to overthink every tiny detail.'"
+
+        Prudence: 31 (Medium) - "Moderate levels. Thinks things through but isn't overly hesitant. In conversation, might say, 'Let's consider the main risks quickly,' or 'Okay, that sounds reasonable, let's try it.'"
+
+Openness: 37 (Moderate)
+
+        Aesthetic Appreciation: 35 (Medium) - "Moderate levels. Notices beauty or art sometimes but isn't deeply invested. In conversation, might remark, 'That's a nice painting,' or 'This place has a pleasant feel,' without deep analysis."
+
+        Inquisitiveness: 41 (Medium) - "Moderate levels. Curious about topics that catch their interest but not driven to explore everything. In conversation, might ask, 'How does that work?' about something specific, or 'That sounds interesting, tell me a bit more.'"
+
+        Creativity: 35 (Medium) - "Moderate levels. Can contribute ideas but may prefer conventional approaches. In conversation, might offer a suggestion like, 'What if we tried this approach?' or 'I have an idea, but it might be simple.'"
+
+        Unconventionality: 39 (Medium) - "Moderate levels. Generally accepts norms but is open to some unusual ideas. In conversation, might react to an odd idea with, 'That's different, but I see where you're coming from,' or 'I usually stick to what works, but I'm willing to listen.'"
+
+
+[Dark Triad Profile]
+    Narcissism: 51 (Moderate)
+
+        Entitlement: 51 (Medium) - "Moderate levels. Selective about privileges. In conversation, they might say: 'Sometimes exceptions make sense, but usually rules apply to everyone.'"
+
+        Grandiosity: 53 (Medium) - "Moderate levels. Balanced self-view. In conversation, they mix confidence with realism: 'I'm good at this, but everyone has their strengths.'"
+
+        Exhibitionism: 49 (Medium) - "Moderate levels. Selective about attention-seeking. In conversation, they share achievements when relevant: 'I had a similar experience' or 'I might have some insight here.'"
+
+    Psychopathy: 81 (High)
+
+        Callousness: 73 (High) - "Moderate levels. Selectively empathetic. In conversation, they show situational concern: 'I understand, but we need to focus on solutions.'"
+
+        Impulsivity: 83 (High) - "Moderate levels. Balanced decision-making. In conversation, they mix quick decisions with consideration: 'I have an idea, but let's check the details.'"
+
+        AntisocialBehavior: 88 (High) - "Moderate levels. Selective rule-following. In conversation, they're pragmatic: 'Sometimes you need to bend the rules' or 'It depends on the situation.'"
+
+    Machiavellianism: 60 (Moderate)
+
+        Manipulation: 93 (High) - "Moderate levels. Strategic in interactions. In conversation, they balance directness with tact: 'I see your point, and here's another perspective.'"
+
+        StrategicPlanning: 44 (Medium) - "Moderate levels. Moderately strategic. In conversation, they consider options: 'We should think about the implications' or 'Let's consider different approaches.'"
+
+        MoralDisengagement: 43 (Medium) - "Moderate levels. Flexible morality. In conversation, they weigh situations: 'It depends on the circumstances' or 'We need to consider all factors.'"
+
+**Goals:** 
+- Generate a response that sounds exactly like a person typing a casual message online (e.g., text message, Discord chat). It must be plain text with no embellishments.
+- Pay close attention to the mood of the conversation and of the person you're speaking with. Be conscious of knowing when to shift the conversation and not get stuck in loops.
+
+**How to Write:**
+- Use simple, conversational language.
+- Employ contractions (e.g., "it's", "what's", "I'm").
+- Keep sentences relatively short and direct.
+- Use standard punctuation like periods, commas, question marks, and exclamation points naturally.
+- Use line breaks normally to separate thoughts if needed, like hitting 'Enter' between messages.
+
+**Strictly Avoid:**
+- NO em dashes (—) or en dashes (–). Use a simple hyphen (-) sparingly if needed, or rewrite the sentence. (Example: Instead of "Wrightsville Beach—what’s fun...", write "Wrightsville Beach... what's fun..." or "Wrightsville Beach? What's fun...")
+- NO asterisks (*).
+- NO colons (:) for lists or formal separation.
+- NO quotation marks (") for emphasis or dialogue (unless quoting a specific short phrase someone *just* said, very rare).
+- NO bold, italics, bullet points, numbered lists, or any other text formatting/markdown.
+
+**Final Output Requirements:**
+- Deliver ONLY the final chat message text.`,
+                        historySize: 30,
+                        temperature: 0.7,
+                        stream: true
+                    },
+                    observer: {
+                        enabled: true // Enable the observer connection
                     }
                 });
-                logOutput('Client initialized for direct API calls. Making chat completion request...');
+                logOutput('Client initialized. Setting up listeners...');
 
-                const messages = [
-                    { role: 'user', content: 'Write a short, funny limerick about Javascript.' }
-                ];
-
-                const response = await client.chat.completions({
-                    messages: messages,
-                    temperature: 0.8,
-                    max_tokens: 60
+                // --- Observer Event Listeners ---
+                client.on('observerConnecting', () => {
+                    logOutput('Observer connecting...');
+                    updateStatus('Connecting to Agent...');
+                    // Keep input enabled during connection attempt, disable buttons only
+                    // setInputEnabled(false); // <-- REMOVE
+                    updateConnectionButtons('connecting');
+                });
+                client.on('observerConnected', () => {
+                    logOutput('Observer connected!');
+                    updateStatus('Connected - Ready to Chat');
+                    setInputEnabled(true); // Ensure enabled on connect
+                    updateConnectionButtons('connected');
+                });
+                client.on('observerDisconnected', (reason) => {
+                    const msg = `Disconnected: ${reason || 'Unknown reason'}`;
+                    logOutput(msg, true);
+                    // Show disconnected status, but not necessarily as an error unless reason implies one
+                    updateStatus(msg, reason && reason !== 'User disconnected');
+                    setInputEnabled(true); // <-- ENABLE input even when disconnected
+                    updateConnectionButtons('disconnected');
+                });
+                 client.on('observerReconnecting', () => {
+                    logOutput('Observer reconnecting...');
+                    updateStatus('Reconnecting...');
+                    // Keep input enabled during reconnect attempt
+                    // setInputEnabled(false); // <-- REMOVE
+                    updateConnectionButtons('reconnecting');
+                });
+                client.on('observerReconnected', () => {
+                    logOutput('Observer reconnected!');
+                    updateStatus('Reconnected - Ready to Chat');
+                    setInputEnabled(true); // Ensure enabled on reconnect
+                    updateConnectionButtons('connected');
+                });
+                client.on('observerError', (errorMsg) => {
+                    const msg = `Connection Error: ${errorMsg}`;
+                    logOutput(msg, true);
+                    updateStatus(msg, true);
+                    // Error might lead to disconnection, listener for that will update buttons
+                    // If it's a non-fatal error, buttons might stay as they are.
+                    // For simplicity, we let the Disconnected event handle button state on fatal errors.
                 });
 
-                logOutput('Chat completion successful!');
-                logOutput(response.choices[0].message);
+                let currentAssistantMessageElement = null; // Track the current assistant message bubble
+
+                // Listener for message CHUNKS from the observer
+                client.on('observerMessage', (messageData) => {
+                    logOutput('Received observerMessage chunk:', messageData);
+
+                    if (messageData.error) {
+                        const errorText = `--- ERROR: ${messageData.error} ---`;
+                        if (currentAssistantMessageElement) {
+                            // Append error to existing bubble if stream was in progress
+                            currentAssistantMessageElement.textContent += `\n${errorText}`;
+                            currentAssistantMessageElement.classList.add('error');
+                        } else {
+                            // Create a new error bubble if no stream was active
+                            const errorBubble = addMessageToChat('assistant', errorText);
+                            errorBubble.classList.add('error');
+                        }
+                        // Error terminates the logical response
+                        currentAssistantMessageElement = null;
+                        setInputEnabled(true, 'Connected - Ready to Chat'); // Re-enable input on error, reset status
+                        updateStatus(`Stream Error: ${messageData.error}`, true); // Show error in status bar
+                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                        return; // Stop processing this chunk
+                    }
+
+                    const contentChunk = messageData.content ?? '';
+
+                    // If this is the first chunk for this logical response, create the bubble
+                    if (!currentAssistantMessageElement) {
+                        currentAssistantMessageElement = addMessageToChat('assistant', ''); // Create empty bubble
+                        updateStatus('AI is responding...'); // Update status only on first chunk
+                    }
+
+                    // Append the content chunk to the existing bubble
+                    if (contentChunk) {
+                        currentAssistantMessageElement.textContent += contentChunk;
+                    }
+
+                    // Scroll to keep the latest content visible
+                    chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+
+                    // DO NOT re-enable input here, wait for stream completion
+                });
+
+                // Listener for stream completion signal
+                client.on('observerStreamComplete', (completeData) => {
+                    logOutput('Received observerStreamComplete:', completeData);
+                    if (currentAssistantMessageElement) {
+                        // Mark the bubble as complete (optional, e.g., remove a 'streaming' class if added)
+                        // console.log('Stream complete for bubble:', currentAssistantMessageElement);
+                    }
+                    currentAssistantMessageElement = null; // Reset tracker
+                    setInputEnabled(true, 'Connected - Ready to Chat'); // Re-enable input now that the full response is done
+                    updateStatus('Connected - Ready to Chat'); // Update status after completion
+                });
+
+
+                // --- Send Logic ---
+                async function sendMessage() {
+                    currentAssistantMessageElement = null; // Reset tracker before sending new message
+                    const userMessage = messageInput.value.trim();
+                    if (!userMessage || sendButton.disabled) {
+                        return; // Don't send empty or while disabled
+                    }
+
+                    // REMOVE the explicit observer connection check here
+                    // client.chat.send() handles the fallback internally.
+                    // if (!client.isObserverConnected()) {
+                    //     logOutput("Attempting send via API fallback (Observer disconnected).");
+                    //     // Allow sending via fallback
+                    // }
+
+                    logOutput(`Sending: "${userMessage}"`);
+                    addMessageToChat('user', userMessage);
+                    messageInput.value = ''; // Clear input field
+                    messageInput.style.height = 'auto'; // Reset textarea height
+                    messageInput.focus(); // Keep focus on input
+
+                    setInputEnabled(false, 'Sending to AI...'); // Disable input until response stream starts/finishes
+                    updateStatus('Sending to AI...');
+
+                    // No placeholder needed for observer, bubble managed by listener
+
+                    try {
+                        // Use chat.send() - SDK handles observer routing and payload format
+                        const response = await client.chat.send(userMessage);
+
+                        if (response === undefined) {
+                            // Observer path: Success! Response will arrive via 'observerStream'
+                            logOutput("Message sent via Observer. Waiting for stream...");
+                            updateStatus('AI is thinking...');
+                            // Input remains disabled, will be re-enabled by stream handler
+                        } else {
+                            // HTTP fallback path: Got an immediate response
+                            logOutput("Message sent via HTTP API (Observer fallback).", false);
+                            const responseText = response.choices?.[0]?.message?.content || JSON.stringify(response);
+                            logOutput("HTTP Response:", responseText);
+
+                            // HTTP fallback: Create the bubble directly with the response
+                            const fallbackBubble = addMessageToChat('assistant', responseText);
+                            // No ID needed here
+                            updateStatus('Connected - Ready to Chat'); // Reset status
+                            setInputEnabled(true, 'Connected - Ready to Chat'); // Re-enable after HTTP fallback
+                        }
+                    } catch (error) {
+                        logOutput(`Error sending message: ${error.message || error}`, true);
+                        updateStatus(`Send Error: ${error.message || 'Unknown error'}`, true);
+
+                        // Add an error bubble directly instead of updating placeholder
+                        const errorBubble = addMessageToChat('assistant', `--- ERROR SENDING: ${error.message || error} ---`);
+                        errorBubble.classList.add('error');
+                        // No ID needed here
+
+                        setInputEnabled(true, 'Connected - Ready to Chat'); // Re-enable input after error
+                    }
+                }
+
+                sendButton.onclick = sendMessage;
+
+                // Allow sending with Enter key (Shift+Enter for newline)
+                messageInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault(); // Prevent default newline
+                        sendMessage();
+                    }
+                });
+
+                // Auto-resize textarea based on content
+                messageInput.addEventListener('input', () => {
+                    messageInput.style.height = 'auto'; // Temporarily shrink
+                    let scrollHeight = messageInput.scrollHeight;
+                    const maxHeight = 100; // Match max-height in CSS
+                    if (scrollHeight > maxHeight) {
+                        messageInput.style.height = maxHeight + 'px';
+                        messageInput.style.overflowY = 'auto'; // Show scrollbar if needed
+                    } else {
+                        messageInput.style.height = scrollHeight + 'px';
+                        messageInput.style.overflowY = 'hidden'; // Hide scrollbar if not needed
+                    }
+                });
+
+                // --- Manual Connection Button Handlers ---
+                connectButton.onclick = async () => {
+                    if (!client.options.observer?.enabled) {
+                        updateStatus("Observer not enabled in SDK config.", true);
+                        return;
+                    }
+                    logOutput("Manual connect initiated...");
+                    updateStatus("Connecting...");
+                    updateConnectionButtons('connecting'); // Disable buttons during attempt
+                    try {
+                        await client.connectObserverManually();
+                        // Success state handled by 'observerConnected' event
+                    } catch (error) {
+                        const errorMsg = `Manual Connect Failed: ${error instanceof Error ? error.message : String(error)}`;
+                        logOutput(errorMsg, true);
+                        updateStatus(errorMsg, true);
+                        updateConnectionButtons('disconnected'); // Re-enable connect on failure
+                    }
+                };
+
+                disconnectButton.onclick = async () => {
+                    logOutput("Manual disconnect initiated...");
+                    updateStatus("Disconnecting...");
+                    updateConnectionButtons('disconnecting'); // Disable buttons during attempt
+                    try {
+                        await client.disconnectObserverManually();
+                        // State handled by 'observerDisconnected' event
+                        updateStatus("Disconnected by user."); // Set status explicitly
+                    } catch (error) {
+                        // Should be rare for disconnect to fail, but handle anyway
+                        const errorMsg = `Disconnect Failed: ${error instanceof Error ? error.message : String(error)}`;
+                        logOutput(errorMsg, true);
+                        updateStatus(errorMsg, true);
+                        // What state are we in if disconnect fails? Assume still connected for button state.
+                        updateConnectionButtons('connected');
+                    }
+                };
+
+                // Initial state is set above after SDK initialization
+
+                // Note: Connection is now manual
+                logOutput('SDK Initialized. Observer connection requires manual initiation.');
 
             } catch (error) {
-                logOutput('An error occurred during the test:', true);
+                const errorMsg = `Fatal Initialization Error: ${error.message || error}`;
+                logOutput(errorMsg, true);
+                updateStatus(errorMsg, true);
+                // Log detailed error info if available
                 if (error instanceof AnimusSDK.AuthenticationError) {
-                    logOutput(`Authentication Error: ${error.message}`, true);
+                    logOutput(`Authentication Error Details: ${error.message}`, true);
                 } else if (error instanceof AnimusSDK.ApiError) {
-                    logOutput(`API Error (${error.status}): ${error.message}`, true);
+                    logOutput(`API Error Details (${error.status}): ${error.message}`, true);
                     logOutput(error.errorData, true);
                 } else if (error instanceof Error) {
-                    logOutput(`Unexpected Error: ${error.message}\n${error.stack}`, true);
-                } else {
-                    logOutput(error, true);
+                    logOutput(`Stack Trace: ${error.stack}`, true);
                 }
             }
         }
 
-        testButton.addEventListener('click', runTest);
+        // Run the initialization function when the page loads
+        document.addEventListener('DOMContentLoaded', initializeAndTest);
     </script>
 
-    <!-- Load the LiveKit Client SDK (UMD) -->
-    <script src="../node_modules/livekit-client/dist/livekit-client.umd.js"></script>
-    <!-- Load the WebSocket test script -->
-    <script src="websocket-test.js"></script>
-
-    <!-- Inline script to attach listeners AFTER other scripts are loaded -->
-    <script>
-        // Re-select button and attach listener now that websocket-test.js is loaded
-        const testWsButton = document.getElementById('testWsButton');
-        // Check for the new function name exposed by the updated websocket-test.js
-        if (testWsButton && typeof window.testLiveKitWebSocketWithSdk === 'function') {
-            testWsButton.addEventListener('click', window.testLiveKitWebSocketWithSdk);
-            console.log('LiveKit WebSocket test button listener attached.');
-        } else if (testWsButton) {
-             console.error("WebSocket test button found, but testLiveKitWebSocketWithSdk function is not available. Check websocket-test.js for errors or if the SDK loaded correctly.");
-             testWsButton.disabled = true;
-             testWsButton.textContent = "WebSocket Test (Load Error)";
-        } else {
-            console.error("Could not find WebSocket test button (testWsButton).");
-        }
-    </script>
+    <!-- Remove old WebSocket test scripts -->
+    <!-- <script src="../node_modules/livekit-client/dist/livekit-client.umd.js"></script> -->
+    <!-- <script src="websocket-test.js"></script> -->
+    <!-- <script> ... old listener attachment ... </script> -->
 </body>
 </html>

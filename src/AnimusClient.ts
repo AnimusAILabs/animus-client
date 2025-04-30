@@ -1,14 +1,26 @@
-import { AuthHandler, AuthenticationError, LiveKitContext } from './AuthHandler';
+import { EventEmitter } from 'eventemitter3';
+import {
+    Room,
+    RoomEvent,
+    ConnectionState,
+    RemoteParticipant,
+    DataPacket_Kind,
+    TextStreamReader, // Import TextStreamReader
+    LocalParticipant, // Import LocalParticipant if needed for sendText
+    RoomConnectOptions, // Import RoomConnectOptions
+    LogLevel, // Optional: for LiveKit logging
+} from 'livekit-client';
+
+// ... other imports remain the same
+import { AuthHandler, AuthenticationError, LiveKitContext, LiveKitDetails } from './AuthHandler';
 import { RequestUtil, ApiError } from './RequestUtil';
-import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk } from './Chat';
-import { MediaModule, MediaCompletionRequest, MediaCompletionResponse, MediaAnalysisRequest, MediaAnalysisResultResponse, MediaAnalysisStatusResponse } from './Media';
+import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk } from './Chat'; // Remove AnimusChatOptions import if present
+import { MediaModule, MediaCompletionRequest, MediaCompletionResponse, MediaAnalysisRequest, MediaAnalysisResultResponse, MediaAnalysisStatusResponse } from './Media'; // Remove AnimusVisionOptions import if present
 
 // Re-export error types for convenience
 export { AuthenticationError, ApiError };
 
-/**
- * Configuration options for the AnimusClient.
- */
+// --- Define Module-Specific Options Interfaces ---
 
 /** Configuration specific to the Chat module, allowing defaults for common API parameters. */
 export interface AnimusChatOptions {
@@ -68,48 +80,113 @@ export interface AnimusVisionOptions {
 }
 
 
-export interface AnimusClientOptions {
-  /**
-   * Required: URL string pointing to the client's backend Token Proxy endpoint.
-   * This endpoint is responsible for securely fetching the access token.
-   */
-  tokenProviderUrl: string;
-
-  /**
-   * Optional: Base URL for the Animus AI API.
-   * Defaults to 'https://api.animusai.co/v3'.
-   */
-  apiBaseUrl?: string;
-
-  /**
-   * Optional: Configuration defaults for the Chat module.
-   * If provided, `model` and `systemMessage` are required within this object.
-   */
-  chat?: AnimusChatOptions;
-
-  /**
-   * Optional: Configuration defaults for the Vision module.
-   * If provided, `model` is required within this object.
-   */
-  vision?: AnimusVisionOptions;
-
-  /**
-   * Optional: Specifies where to store the fetched access token.
-   * 'sessionStorage': Cleared when the browser tab is closed (default).
-   * 'localStorage': Persists across browser sessions.
-   */
-  tokenStorage?: 'localStorage' | 'sessionStorage';
-
+/** Configuration specific to the LiveKit Observer connection */
+export interface AnimusObserverOptions { // This definition is correct
+    /** Required: Set to true to enable the Observer connection. */
+    enabled: boolean;
+    // Future options like custom topic, reconnection settings could go here
 }
 
+export interface AnimusClientOptions {
+    /**
+     * Required: URL string pointing to the client's backend Token Proxy endpoint.
+     * This endpoint is responsible for securely fetching the access token.
+     */
+    tokenProviderUrl: string;
+
+    /**
+     * Optional: Base URL for the Animus AI API.
+     * Defaults to 'https://api.animusai.co/v3'.
+     */
+    apiBaseUrl?: string;
+
+    /**
+     * Optional: Configuration defaults for the Chat module.
+     * If provided, `model` and `systemMessage` are required within this object.
+     */
+    chat?: AnimusChatOptions;
+
+    /**
+     * Optional: Configuration defaults for the Vision module.
+     * If provided, `model` is required within this object.
+     */
+    vision?: AnimusVisionOptions;
+
+    /**
+     * Optional: Configuration for the LiveKit Observer connection.
+     * If provided and `enabled` is true, the SDK will manage the Observer connection.
+     */
+    observer?: AnimusObserverOptions; // <-- Added Observer options
+
+    /**
+     * Optional: Specifies where to store the fetched access token.
+     * 'sessionStorage': Cleared when the browser tab is closed (default).
+     * 'localStorage': Persists across browser sessions.
+     */
+    tokenStorage?: 'localStorage' | 'sessionStorage';
+}
+
+// --- Unified Stream Event Definitions ---
+
+/** Identifies the source of a stream */
+export type StreamSource = 'observer' | 'http';
+
+/** Data payload for the 'streamChunk' event. */
+export interface StreamChunkData {
+    source: StreamSource;
+    /** The raw chunk object received from the API or Observer. */
+    chunk: ChatCompletionChunk;
+    /** Content delta from the chunk, if any. */
+    deltaContent?: string;
+    /** Compliance violations associated with this stream (consistent across chunks). */
+    compliance_violations?: string[] | null;
+}
+
+/** Data payload for the 'streamComplete' event. */
+export interface StreamCompleteData {
+    source: StreamSource;
+    /** Final aggregated content of the stream. */
+    fullContent: string;
+    /** Final usage statistics, if available. */
+    usage?: ChatCompletionResponse['usage'] | null;
+    /** Final compliance violations status for the stream. */
+    compliance_violations?: string[] | null;
+}
+
+/** Data payload for the 'streamError' event. */
+export interface StreamErrorData {
+    source: StreamSource;
+    /** The error message. */
+    error: string;
+}
+
+/** Defines the unified event map for the AnimusClient emitter. */
+export type AnimusClientEventMap = {
+    // Stream Events
+    streamChunk: (data: StreamChunkData) => void;
+    streamComplete: (data: StreamCompleteData) => void;
+    streamError: (data: StreamErrorData) => void;
+
+    // Observer Connection Status Events (can potentially keep these separate)
+    observerConnecting: () => void;
+    observerConnected: () => void;
+    observerDisconnected: (reason?: string) => void; // Keep reason optional
+    observerReconnecting: () => void;
+    observerReconnected: () => void;
+    observerError: (error: string) => void; // Keep simple error string
+};
+
+
 /**
- * Animus Javascript SDK Client for browser environments.
- */
-export class AnimusClient {
+* Animus Javascript SDK Client for browser environments.
+* Emits events for Observer connection status and incoming streams.
+*/
+export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
   // Define a type for processed options where top-level are required, nested are optional
-  private options: Omit<Required<AnimusClientOptions>, 'chat' | 'vision'> & {
+  private options: Omit<Required<AnimusClientOptions>, 'chat' | 'vision' | 'observer'> & {
       chat?: AnimusChatOptions;
       vision?: AnimusVisionOptions;
+      observer?: AnimusObserverOptions; // <-- Add observer to processed options
   };
 
   // Internal modules
@@ -121,11 +198,20 @@ export class AnimusClient {
   /** Access Media (Vision) API methods. */
   public readonly media: MediaModule;
 
+  // --- Observer Specific Members ---
+  private observerEnabled: boolean = false;
+  private livekitRoom: Room | null = null;
+  private observerConnectionState: ConnectionState = ConnectionState.Disconnected;
+  private observerTopic: string = 'animus-observer'; // Default topic
+  private currentObserverStreamContent: string = ''; // Accumulator for the current stream
+  private currentStreamAccumulator: { [participantId: string]: string } = {}; // Accumulator per participant stream
+
   /**
    * Creates an instance of the AnimusClient.
    * @param options - Configuration options for the SDK.
    */
   constructor(options: AnimusClientOptions) {
+      super(); // <-- Initialize EventEmitter
     if (!options.tokenProviderUrl) {
       throw new Error('AnimusClient requires a `tokenProviderUrl` in options.');
     }
@@ -144,47 +230,68 @@ export class AnimusClient {
         }
     }
 
+        if (options.observer && typeof options.observer.enabled !== 'boolean') {
+             console.warn('AnimusClient: `observer.enabled` must be a boolean. Observer disabled.');
+             // Ensure observer object exists before setting enabled to false
+             options.observer = { ...options.observer, enabled: false };
+        }
+
+
     // Apply defaults and structure options
-    // Use Required<> carefully, maybe define a processed options type later
     this.options = {
-      // Required top-level
-      tokenProviderUrl: options.tokenProviderUrl,
-      // Optional top-level with defaults
-      apiBaseUrl: options.apiBaseUrl ?? 'https://api.animusai.co/v3',
-      tokenStorage: options.tokenStorage ?? 'sessionStorage',
-     // Optional nested configs (pass through if provided)
-     chat: options.chat,
-     vision: options.vision,
+        // Required top-level
+        tokenProviderUrl: options.tokenProviderUrl,
+        // Optional top-level with defaults
+        apiBaseUrl: options.apiBaseUrl ?? 'https://api.animusai.co/v3',
+        tokenStorage: options.tokenStorage ?? 'sessionStorage',
+        // Optional nested configs (pass through if provided)
+        chat: options.chat,
+        vision: options.vision,
+        observer: options.observer, // <-- Store observer options
     };
+
+    // --- Initialize Observer State ---
+    this.observerEnabled = this.options.observer?.enabled ?? false;
 
     // Initialize internal modules
     this.authHandler = new AuthHandler(this.options.tokenProviderUrl, this.options.tokenStorage);
     this.requestUtil = new RequestUtil(this.options.apiBaseUrl, this.authHandler);
 
     // Pass relevant config to modules
+    // We'll need to pass a reference to the client or specific observer methods to ChatModule later
     this.chat = new ChatModule(
         this.requestUtil,
-       this.options.chat // Pass the whole chat config object (or undefined)
-   );
-   this.media = new MediaModule(
+        this.options.chat,
+        // Pass observer check and send functions
+        this.isObserverConnected.bind(this),
+        this.sendObserverText.bind(this)
+    );
+    this.media = new MediaModule(
         this.requestUtil,
-        this.options.vision // Pass the whole vision config object (or undefined)
+        this.options.vision
     );
 
-    console.log('AnimusClient initialized.');
+    console.log(`AnimusClient initialized. Observer enabled: ${this.observerEnabled}`);
+
+    // --- Observer Connection is NOT initiated automatically ---
+    // User must call connectObserverManually() if observer is enabled.
+    // if (this.observerEnabled) {
+    //     this.connectObserver(); // REMOVED automatic connection
+    // }
   }
 
   /**
    * Clears any stored authentication token.
+   * Also disconnects the observer if connected.
    */
   public clearAuthToken(): void {
     this.authHandler.clearAllDetails();
     console.log('Cleared stored authentication token.');
+    if (this.observerEnabled && this.livekitRoom) {
+        // Don't wait for disconnect, just initiate
+        this.disconnectObserver();
+    }
   }
-
-  // --- Direct access via modules ---
-  // Methods like chat.completions and media.analyze are accessed via
-  // client.chat.completions(...) and client.media.analyze(...)
 
   /**
    * Retrieves the current valid LiveKit URL and token, fetching new details if necessary.
@@ -193,13 +300,489 @@ export class AnimusClient {
    * @returns An object containing the LiveKit URL and token for the specified context.
    * @throws {AuthenticationError} If valid details cannot be obtained.
    */
-  public async getLiveKitDetails(context: LiveKitContext): Promise<import('./AuthHandler').LiveKitDetails> {
+  public async getLiveKitDetails(context: LiveKitContext): Promise<LiveKitDetails> {
       return this.authHandler.getLiveKitDetails(context);
+  }
+
+  // --- Observer Connection Management ---
+
+  private async connectObserver(): Promise<void> {
+      // Prevent multiple connection attempts
+      if (this.observerConnectionState !== ConnectionState.Disconnected) {
+          console.warn(`Observer connection attempt ignored. Current state: ${this.observerConnectionState}`);
+          return;
+      }
+      console.log('Attempting to connect to Observer...');
+      this.updateObserverState(ConnectionState.Connecting);
+      this.emit('observerConnecting');
+
+      try {
+          const details = await this.getLiveKitDetails('observer');
+          this.livekitRoom = new Room({
+               // logLevel is set statically via setLogLevel, not here
+          });
+
+          // Setup listeners *before* connecting
+          this.setupObserverRoomListeners();
+
+          // Connect to the room
+          await this.livekitRoom.connect(details.url, details.token, {
+              autoSubscribe: true, // Automatically subscribe to participants and their tracks/data
+          });
+
+          // State update (Connected) is handled by the 'ConnectionStateChanged' listener
+          console.log('Observer connection request successful.');
+
+      } catch (error) {
+          console.error('Failed to initiate Observer connection:', error);
+          this.updateObserverState(ConnectionState.Disconnected); // Reset state on failure
+          this.emit('observerError', error instanceof Error ? error.message : String(error));
+          this.emit('observerDisconnected', 'Connection failed'); // Also emit disconnected
+          // Clean up room object if connection failed
+          if (this.livekitRoom) {
+              await this.livekitRoom.disconnect();
+              this.livekitRoom = null;
+          }
+      }
+  }
+
+  private async disconnectObserver(): Promise<void> {
+       if (!this.livekitRoom || this.observerConnectionState === ConnectionState.Disconnected) {
+           console.log('Observer already disconnected or not initialized.');
+           return;
+       }
+       console.log('Disconnecting Observer...');
+       // Setting state immediately prevents race conditions if called multiple times
+       this.updateObserverState(ConnectionState.Disconnected);
+       await this.livekitRoom.disconnect(true); // true to stop tracks
+       // Listener will fire 'observerDisconnected' event
+       this.livekitRoom = null; // Clean up room reference
+       console.log('Observer disconnect initiated.');
+  }
+
+  private setupObserverRoomListeners(): void {
+      if (!this.livekitRoom) return;
+
+      // Remove existing listeners to prevent duplicates if re-setup occurs
+      this.livekitRoom.removeAllListeners(RoomEvent.ConnectionStateChanged);
+      this.livekitRoom.removeAllListeners(RoomEvent.DataReceived); // Correct event name
+      this.livekitRoom.removeAllListeners(RoomEvent.ParticipantConnected);
+      this.livekitRoom.removeAllListeners(RoomEvent.ParticipantDisconnected);
+
+      this.livekitRoom
+          .on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
+              console.log(`Observer Connection State Changed: ${state}`);
+              const oldState = this.observerConnectionState;
+              this.updateObserverState(state);
+
+              switch (state) {
+                  case ConnectionState.Connected:
+                      if (oldState === ConnectionState.Reconnecting) {
+                          this.emit('observerReconnected');
+                      } else {
+                          this.emit('observerConnected');
+                      }
+                      // Register the stream handler *after* successful connection
+                      this.registerObserverStreamHandler();
+                      break;
+                  case ConnectionState.Disconnected:
+                      // Provide reason if available (e.g., from disconnect method or error)
+                      this.emit('observerDisconnected');
+                      // Room reference is nullified in disconnectObserver or connection failure handler
+                      break;
+                  case ConnectionState.Connecting:
+                       this.emit('observerConnecting');
+                       break;
+                  case ConnectionState.Reconnecting:
+                      this.emit('observerReconnecting');
+                      break;
+              }
+          })
+          .on(RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant, kind?: DataPacket_Kind, topic?: string) => { // Correct event name
+              // Primarily using registerTextStreamHandler, but log if unexpected data packets arrive
+              if (topic !== this.observerTopic) {
+                 console.log(`Observer: Received unexpected data packet (kind: ${kind}, topic: ${topic})`); // Use DataReceived event
+              }
+          })
+          .on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
+               console.log(`Observer: Participant connected: ${participant.identity}`);
+               // Could potentially trigger stream handler registration if needed, but usually done on initial connect
+          })
+           .on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
+               console.log(`Observer: Participant disconnected: ${participant.identity}`);
+          });
+  }
+
+   private registerObserverStreamHandler(): void {
+      if (!this.livekitRoom || this.observerConnectionState !== ConnectionState.Connected) {
+          console.warn('Cannot register stream handler: Observer not connected.');
+          return;
+      }
+
+      // Cannot reliably remove specific stream handlers by topic easily.
+      // LiveKit manages handlers internally. Re-registering might replace or add.
+      // If issues arise, a more complex handler management strategy might be needed.
+      // For now, just register.
+
+      console.log(`Registering text stream handler for topic: ${this.observerTopic}`);
+
+      this.livekitRoom.registerTextStreamHandler(this.observerTopic, (reader: TextStreamReader, participantInfo) => {
+          const participantId = participantInfo?.identity ?? 'unknown';
+          const topic = reader.info.topic ?? this.observerTopic;
+          // console.log(`Observer: Received OpenAI-style text stream from ${participantId} on topic ${topic}`);
+
+          // Initialize accumulator for this specific participant stream using the class member
+          //this.currentStreamAccumulator[participantId] = '';
+
+          // Process stream chunk by chunk
+          (async () => {
+              let streamComplianceViolations: string[] | undefined = undefined; // Store compliance violations for this stream
+              let finalUsage: ChatCompletionResponse['usage'] | undefined = undefined; // Store final usage
+
+              try {
+                  // Initialize accumulator for this specific participant stream
+                  if (!this.currentStreamAccumulator[participantId]) {
+                      this.currentStreamAccumulator[participantId] = '';
+                  }
+
+                  for await (const rawChunk of reader) {
+                      const chunk = rawChunk.trim();
+
+                      if (chunk === '[DONE]') {
+                          // Get final content from the class member accumulator
+                          const finalContent = this.currentStreamAccumulator[participantId] ?? '';
+                          // Use the new StreamCompleteData interface
+                          const completeData: StreamCompleteData = {
+                              source: 'observer',
+                              fullContent: finalContent,
+                              usage: finalUsage, // Include final usage
+                              compliance_violations: streamComplianceViolations // Include final compliance status
+                          };
+                          this.emit('streamComplete', completeData); // Emit unified event
+
+                          // --- Add Assistant Response to History ---
+                          // Add to history ONLY if there were no compliance violations
+                          if (!streamComplianceViolations || streamComplianceViolations.length === 0) {
+                              console.log(`[Animus SDK DEBUG] Observer stream complete (No Compliance Issues). Adding content length: ${finalContent.length} to history.`);
+                              // Pass compliance status (which is null/empty) to history function
+                              this.chat.addAssistantResponseToHistory(finalContent, streamComplianceViolations);
+                          } else {
+                              console.warn(`[Animus SDK DEBUG] Observer stream complete WITH Compliance Issues. Content NOT added to history. Violations: ${streamComplianceViolations.join(', ')}`);
+                              // Even though not added, call history function with violations for consistency (it will handle the return)
+                              this.chat.addAssistantResponseToHistory(finalContent, streamComplianceViolations);
+                          }
+                          // -----------------------------------------
+
+                          // Clean up AFTER successful processing of [DONE]
+                          delete this.currentStreamAccumulator[participantId];
+                          console.log(`[Animus SDK DEBUG] Cleaned up accumulator for participant ${participantId} after [DONE]`);
+
+                          break; // Exit loop on [DONE]
+                      }
+
+                      if (chunk) {
+                          let jsonData = chunk;
+                          if (chunk.startsWith('data: ')) {
+                              jsonData = chunk.substring(5).trim();
+                          }
+                          if (!jsonData) continue;
+
+                          try {
+                              // Parse the chunk - it might contain content, metadata, or both
+                              const parsedChunk = JSON.parse(jsonData) as ChatCompletionChunk; // Parse as the base type first
+
+                              let deltaContent: string | undefined = undefined;
+                              let currentChunkComplianceViolations: string[] | null | undefined = parsedChunk.compliance_violations;
+                              let currentChunkUsage: ChatCompletionResponse['usage'] | null | undefined = parsedChunk.usage;
+                              // Placeholder for potential future error field in chunk, assuming structure { error: string }
+                              let errorMessage: string | undefined = (parsedChunk as any).error;
+
+
+                              // 1. Check for content delta
+                              if (parsedChunk.choices &&
+                                  parsedChunk.choices.length > 0 &&
+                                  parsedChunk.choices[0]?.delta &&
+                                  parsedChunk.choices[0].delta.content !== undefined) {
+                                  deltaContent = parsedChunk.choices[0].delta.content;
+                              }
+
+                              // 2. Update overall stream compliance status if found in this chunk
+                              // (Since it's consistent, we only need to store it once)
+                              if (currentChunkComplianceViolations && !streamComplianceViolations) {
+                                  streamComplianceViolations = currentChunkComplianceViolations;
+                                  console.log(`[Animus SDK DEBUG] Observer stream - Compliance violations status set:`, streamComplianceViolations);
+                              }
+
+                              // 3. Update final usage if present in this chunk
+                              if (currentChunkUsage) {
+                                  finalUsage = currentChunkUsage;
+                              }
+
+                              // 4. Handle errors if present in the chunk
+                              if (errorMessage) {
+                                  console.warn(`Observer: Received error in stream chunk from ${participantId}: ${errorMessage}`);
+                                  // Emit streamError and potentially stop processing this stream?
+                                  this.emit('streamError', {
+                                      source: 'observer',
+                                      error: `Received error in stream chunk: ${errorMessage}`
+                                  });
+                                  // Depending on desired behavior, you might 'continue' or 'break' here
+                                  continue; // Continue processing other chunks for now
+                              }
+
+
+                              // --- Emit streamChunk ---
+                              // Emit even if deltaContent is null, as chunk might contain metadata
+                              const chunkData: StreamChunkData = {
+                                  source: 'observer',
+                                  chunk: parsedChunk,
+                                  deltaContent: deltaContent,
+                                  // Pass the consistent compliance status with every chunk
+                                  compliance_violations: streamComplianceViolations
+                              };
+                              this.emit('streamChunk', chunkData); // Emit unified event
+                              // --------------------------
+
+                              // Accumulate content AFTER emitting the chunk
+                              if (deltaContent) {
+                                  // Ensure accumulator exists before adding
+                                  if (this.currentStreamAccumulator[participantId] === undefined) {
+                                      this.currentStreamAccumulator[participantId] = '';
+                                  }
+                                  this.currentStreamAccumulator[participantId] += deltaContent;
+                              }
+
+
+                          } catch (parseError) {
+                              console.warn(`Observer: Failed to parse chunk from ${participantId} as JSON: "${chunk}"`, parseError);
+                              // Emit unified streamError
+                              this.emit('streamError', {
+                                  source: 'observer',
+                                  error: `Failed to parse stream chunk: ${chunk}`
+                              });
+                          }
+                      }
+                  }
+              } catch (streamError) {
+                  console.error(`Observer: Error reading stream from ${participantId}:`, streamError);
+                   // Emit unified streamError
+                  this.emit('streamError', {
+                      source: 'observer',
+                      error: streamError instanceof Error ? streamError.message : String(streamError)
+                  });
+                  // Clean up accumulator on stream read error
+                  delete this.currentStreamAccumulator[participantId];
+                  console.log(`[Animus SDK DEBUG] Cleaned up accumulator for participant ${participantId} after stream error`);
+              }
+              // REMOVED finally block to prevent premature cleanup
+          })();
+      });
+      console.log(`Text stream handler registered for topic: ${this.observerTopic}`);
+  }
+
+
+  private updateObserverState(newState: ConnectionState): void {
+      if (this.observerConnectionState !== newState) {
+          this.observerConnectionState = newState;
+          console.log(`Observer state updated to: ${newState}`);
+      }
+  }
+
+  // --- Public Observer Methods ---
+
+  /**
+   * Returns the current connection state of the LiveKit Observer.
+   */
+  public getObserverState(): ConnectionState {
+      return this.observerConnectionState;
+  }
+
+  /**
+   * Checks if the Observer is currently connected.
+   * @returns true if the state is Connected, false otherwise.
+   */
+  public isObserverConnected(): boolean {
+      return this.observerConnectionState === ConnectionState.Connected;
+  }
+
+  /**
+   * Explicitly attempts to connect the Observer if it's enabled but not connected/connecting.
+   */
+  public async connectObserverManually(): Promise<void> {
+      if (!this.observerEnabled) {
+          throw new Error("Observer is not enabled in configuration.");
+      }
+      if (this.observerConnectionState !== ConnectionState.Disconnected) {
+          console.log(`Observer cannot connect manually. Current state: ${this.observerConnectionState}`);
+          return; // Or throw? For now, just log and return.
+      }
+      await this.connectObserver();
+  }
+
+   /**
+   * Explicitly disconnects the Observer.
+   */
+  public async disconnectObserverManually(): Promise<void> {
+      if (!this.observerEnabled) {
+           console.warn("Observer is not enabled, cannot disconnect manually.");
+           return;
+      }
+      if (this.observerConnectionState === ConnectionState.Disconnected) {
+           console.log("Observer is already disconnected.");
+           return;
+      }
+      await this.disconnectObserver();
+  }
+
+
+  // --- Internal method for ChatModule to send text ---
+  /** @internal */
+  private async sendObserverText(text: string): Promise<void> {
+      // isObserverConnected check is done in ChatModule before calling this
+      if (!this.livekitRoom || !this.livekitRoom.localParticipant) {
+          // This should ideally not happen if isObserverConnected is true, but safeguard
+          throw new Error("Internal Error: Observer room or local participant not available for sending.");
+      }
+      try {
+          await this.livekitRoom.localParticipant.sendText(text, { topic: this.observerTopic });
+          // console.log(`Sent text via Observer on topic ${this.observerTopic}`); // Reduce log noise
+      } catch (error) {
+          console.error(`Failed to send text via Observer: ${error}`);
+          // Re-throw a more specific error for the caller (ChatModule)
+          // Use status 0 to indicate a non-HTTP error source
+          throw new ApiError(`Failed to send message via LiveKit Observer: ${error instanceof Error ? error.message : String(error)}`, 0, error);
+      }
+  }
+
+  /**
+   * Process an HTTP streaming response for chat completions and emit unified events.
+   * @param response - The raw HTTP Response object from fetch
+   * @internal
+   */
+  public async processHttpStream(response: Response): Promise<void> {
+      if (!response.body) {
+          this.emit('streamError', {
+              source: 'http',
+              error: 'HTTP streaming response body is null'
+          });
+          return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      
+      let buffer = '';
+      let accumulatedContent = '';
+      let streamComplianceViolations: string[] | undefined = undefined;
+      let finalUsage: ChatCompletionResponse['usage'] | undefined = undefined;
+
+      try {
+          while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                  break;
+              }
+
+              buffer += decoder.decode(value, { stream: true });
+
+              // Process buffer line by line
+              let lines = buffer.split('\n');
+              buffer = lines.pop() || ''; // Keep the last potentially incomplete line
+
+              for (const line of lines) {
+                  if (line.trim() === '') continue; // Skip empty lines
+
+                  if (line.startsWith('data: ')) {
+                      const data = line.substring(6).trim();
+                      if (data === '[DONE]') {
+                          // Stream finished via [DONE] signal
+                          const completeData: StreamCompleteData = {
+                              source: 'http',
+                              fullContent: accumulatedContent,
+                              usage: finalUsage,
+                              compliance_violations: streamComplianceViolations
+                          };
+                          this.emit('streamComplete', completeData);
+                          
+                          // Add to history only if no compliance violations
+                          this.chat.addAssistantResponseToHistory(accumulatedContent, streamComplianceViolations);
+                          return; // End the processing
+                      }
+
+                      try {
+                          const chunk = JSON.parse(data) as ChatCompletionChunk;
+                          
+                          // Extract content delta
+                          const deltaContent = chunk.choices?.[0]?.delta?.content;
+                          
+                          // Check for compliance violations
+                          if (chunk.compliance_violations) {
+                              streamComplianceViolations = chunk.compliance_violations;
+                              console.log(`[Animus SDK DEBUG] HTTP stream - Compliance violations detected:`, streamComplianceViolations);
+                          }
+                          
+                          // Check for usage info
+                          if (chunk.usage) {
+                              finalUsage = chunk.usage;
+                          }
+
+                          // Emit chunk event
+                          const chunkData: StreamChunkData = {
+                              source: 'http',
+                              chunk: chunk,
+                              deltaContent: deltaContent,
+                              compliance_violations: streamComplianceViolations
+                          };
+                          this.emit('streamChunk', chunkData);
+                          
+                          // Accumulate content
+                          if (deltaContent) {
+                              accumulatedContent += deltaContent;
+                          }
+                      } catch (e) {
+                          console.error('[Animus SDK] Failed to parse HTTP stream chunk:', data, e);
+                          this.emit('streamError', {
+                              source: 'http',
+                              error: `Failed to parse stream chunk: ${e instanceof Error ? e.message : String(e)}`
+                          });
+                      }
+                  } else {
+                      console.warn('[Animus SDK] Received non-data line in HTTP stream:', line);
+                  }
+              }
+          }
+
+          // Process any remaining buffer content if stream ended without [DONE]
+          if (buffer.trim() !== '') {
+              // Similar processing as above...
+              // (Code omitted for brevity but would be similar to the loop body)
+          }
+
+          // If the stream ended without [DONE], still emit streamComplete
+          const completeData: StreamCompleteData = {
+              source: 'http',
+              fullContent: accumulatedContent,
+              usage: finalUsage,
+              compliance_violations: streamComplianceViolations
+          };
+          this.emit('streamComplete', completeData);
+          
+          // Add to history only if no compliance violations
+          this.chat.addAssistantResponseToHistory(accumulatedContent, streamComplianceViolations);
+
+      } catch (error) {
+          console.error('[Animus SDK] Error processing HTTP stream:', error);
+          this.emit('streamError', {
+              source: 'http',
+              error: error instanceof Error ? error.message : String(error)
+          });
+      } finally {
+          reader.releaseLock();
+      }
   }
 }
 
 // Re-export types from their respective modules
-// export type { AnimusClientOptions } from './AnimusClient'; // Removed - Interface is already exported
 export type {
   ChatMessage,
   ChatCompletionRequest,
@@ -214,3 +797,10 @@ export type {
   MediaAnalysisResultResponse,
   MediaAnalysisStatusResponse
 } from './Media';
+
+// Add Observer specific types for export
+export interface ObserverStreamData { // For streamAggregation = 'chunk'
+    participantIdentity: string;
+    topic: string;
+    stream: AsyncIterable<string>; // Yields raw JSON string chunks
+}

@@ -144,8 +144,8 @@ describe('RequestUtil', () => {
     mockFetchNetworkError('Connection refused');
 
     await expect(requestUtil.request('GET', '/network-error-endpoint')).rejects.toThrow(Error);
-    // Check the specific wrapped error message
-    await expect(requestUtil.request('GET', '/network-error-endpoint')).rejects.toThrow('Network or unexpected error during API request: Connection refused');
+    // Check the specific wrapped error message, including the attempt number
+    await expect(requestUtil.request('GET', '/network-error-endpoint')).rejects.toThrow('Network or unexpected error during API request (Attempt 1): Connection refused');
 
     expect(getTokenMock).toHaveBeenCalledTimes(2); // Called for each attempt
     expect(fetch).toHaveBeenCalledTimes(2);

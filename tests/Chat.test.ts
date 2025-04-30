@@ -1,26 +1,50 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'; // Add beforeEach, afterEach
 import { ChatModule, ChatCompletionRequest, ChatCompletionChunk, ChatCompletionResponse } from '../src/Chat';
-import { RequestUtil } from '../src/RequestUtil';
+import { RequestUtil, ApiError } from '../src/RequestUtil'; // Import ApiError
 import { AuthHandler } from '../src/AuthHandler';
+import type { AnimusChatOptions } from '../src/AnimusClient'; // Import type for config
 
 // Mock dependencies
 vi.mock('../src/RequestUtil');
 vi.mock('../src/AuthHandler');
 
+// Define mocks at a higher scope
+let requestUtilMock: RequestUtil;
+let authHandlerMock: AuthHandler; // Define authHandlerMock here
+const mockIsObserverConnected = vi.fn(() => false); // Default to false
+const mockSendObserverText = vi.fn(async () => { /* Default mock */ });
+
+
 describe('ChatModule', () => {
-  let requestUtilMock: RequestUtil;
-  let chatModule: ChatModule;
+  let chatModule: ChatModule; // Define chatModule here
+
+  // Default config for convenience in tests
+  const defaultChatOptions: AnimusChatOptions = { model: 'test-chat-model', systemMessage: 'Test system message' };
 
   beforeEach(() => {
     // Create instances of mocks for each test
-    // Provide both arguments to AuthHandler constructor
-    const authHandlerMock = new AuthHandler('http://dummy-url', 'sessionStorage');
+    authHandlerMock = new AuthHandler('http://dummy-url', 'sessionStorage'); // Instantiate here
     requestUtilMock = new RequestUtil('http://dummy-base', authHandlerMock);
-    chatModule = new ChatModule(requestUtilMock, { model: 'test-chat-model', systemMessage: 'Test system message' });
+
+    // Reset mocks before each test
+    vi.resetAllMocks();
+    mockIsObserverConnected.mockClear();
+    mockSendObserverText.mockClear();
+    mockIsObserverConnected.mockReturnValue(false); // Ensure default is false
+
+    // Default instantiation using mocks
+    chatModule = new ChatModule(
+        requestUtilMock,
+        defaultChatOptions,
+        mockIsObserverConnected,
+        mockSendObserverText
+    );
   });
 
+  // afterEach is not strictly needed if vi.resetAllMocks() is in beforeEach
+  // but keep restoreAllMocks if preferred
   afterEach(() => {
-    vi.restoreAllMocks(); // Restore mocks after each test
+     vi.restoreAllMocks();
   });
 
   it('should instantiate correctly', () => {
@@ -41,13 +65,19 @@ describe('ChatModule', () => {
     expect((chatModule as any).config?.systemMessage).toBe('Test system message');
   });
 
-  it('should handle streaming completions and update history correctly', async () => {
+  it('should handle streaming completions (HTTP) and update history correctly', async () => {
     // Re-initialize with history enabled for this test
-    chatModule = new ChatModule(requestUtilMock, {
-        model: 'test-chat-model',
-        systemMessage: 'Test system message',
-        historySize: 4 // Enable history
-    });
+    const historySize = 4;
+    chatModule = new ChatModule(
+        requestUtilMock,
+        {
+            model: 'test-chat-model',
+            systemMessage: 'Test system message',
+            historySize: historySize // Enable history
+        },
+        mockIsObserverConnected,
+        mockSendObserverText
+    );
 
     // Mock the raw Response for streaming
     const mockStreamResponse = {
@@ -89,10 +119,21 @@ describe('ChatModule', () => {
       stream: true,
     };
 
-    // Explicitly type the result for the streaming case using safer assertion
+    // Spy on history methods BEFORE making the call
+    const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
+    const addAssistantResponseSpy = vi.spyOn(chatModule as any, 'addAssistantResponseToHistory');
+
+    // --- Make the call ---
+    // Use unknown first for type assertion as suggested by TS error
     const result = await chatModule.completions(request) as unknown as AsyncIterable<ChatCompletionChunk>;
 
-    // 1. Check if requestUtil was called correctly
+    // --- Assertions ---
+
+    // 1. Check user message added to history BEFORE stream consumption
+    expect(addMessageSpy).toHaveBeenCalledTimes(1);
+    expect(addMessageSpy).toHaveBeenCalledWith({ role: 'user', content: 'Say hello' });
+
+    // 2. Check if requestUtil was called correctly
     expect(requestMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledWith(
       'POST',
@@ -108,11 +149,11 @@ describe('ChatModule', () => {
       true // stream flag
     );
 
-    // 2. Check if the result is an AsyncIterable
+    // 3. Check if the result is an AsyncIterable
     expect(result).toBeDefined();
     expect(typeof result[Symbol.asyncIterator]).toBe('function');
 
-    // 3. Consume the mock stream and verify chunks
+    // 4. Consume the mock stream and verify chunks
     const chunks: ChatCompletionChunk[] = []; // Type the chunks array
     let accumulatedContent = '';
     // No need to cast result here anymore as it's typed above
@@ -129,23 +170,36 @@ describe('ChatModule', () => {
     expect(chunks[2]!.choices[0]!.delta).toEqual({ content: ' world!' });
     expect(accumulatedContent).toBe('Hello world!');
 
-    // 4. Verify history update *after* stream consumption
-    // History should contain: User message, Assistant response
-    expect((chatModule as any).chatHistory).toEqual([
+    // 5. Verify assistant response added to history *after* stream consumption
+    expect(addAssistantResponseSpy).toHaveBeenCalledTimes(1);
+    expect(addAssistantResponseSpy).toHaveBeenCalledWith('Hello world!', undefined); // Expect undefined for compliance_violations
+
+    // 6. Verify final history state (addMessageToHistory handles trimming internally)
+    // Access history AFTER spies have been checked
+    const finalHistory = (chatModule as any).chatHistory;
+    expect(finalHistory).toEqual([
         { role: 'user', content: 'Say hello' },
-        { role: 'assistant', content: 'Hello world!' }
+        { role: 'assistant', content: 'Hello world!' } // Assuming addMessageToHistory cleaned it if needed
     ]);
 
+    // Restore all spies used in this test
     requestMock.mockRestore();
+    addMessageSpy.mockRestore();
+    addAssistantResponseSpy.mockRestore();
   });
 
   it('should manage chat history correctly', async () => {
     // Re-initialize ChatModule with historySize
-    chatModule = new ChatModule(requestUtilMock, {
-      model: 'test-chat-model',
-      systemMessage: 'System prompt.',
-      historySize: 2 // Keep last 2 user/assistant messages
-    });
+    chatModule = new ChatModule(
+        requestUtilMock,
+        {
+          model: 'test-chat-model',
+          systemMessage: 'System prompt.',
+          historySize: 2 // Keep last 2 user/assistant messages
+        },
+        mockIsObserverConnected,
+        mockSendObserverText
+    );
 
     const requestMock = vi.spyOn(requestUtilMock, 'request');
 
@@ -172,16 +226,16 @@ describe('ChatModule', () => {
     // Call 2
     requestMock.mockResolvedValueOnce(mockResponse2);
     await chatModule.send('User message 2');
-    // Corrected Expected Messages: System + relevantHistory (Assistant1) + newUser (User2)
+    // Expected Payload: System + History BEFORE User2 (User1, Assistant1) + User2
+    // History before call: [User1, Assistant1]. historySize=2. Max past history = 2-1=1. Actual past = min(2,1)=1. History to add = [Assistant1].
     expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', expect.objectContaining({
       messages: [
         { role: 'system', content: 'System prompt.' },
-        // { role: 'user', content: 'User message 1' }, // User1 is pushed out by historySize=2 and availableSlots=1
-        { role: 'assistant', content: 'Response 1' },
+        { role: 'assistant', content: 'Response 1' }, // Only Assistant1 fits
         { role: 'user', content: 'User message 2' }
       ]
     }), false);
-     // History check remains correct: [User2, Assistant2]
+     // Final History State Check: [User2, Assistant2] (This part remains correct)
      // Let's re-check Chat.ts logic... Ah, it adds User THEN Assistant, then trims.
      // After User2 added: [User1, Assistant1, User2]
      // After Assistant2 added: [User1, Assistant1, User2, Assistant2]
@@ -195,17 +249,16 @@ describe('ChatModule', () => {
     // Call 3
     requestMock.mockResolvedValueOnce(mockResponse3);
     await chatModule.send('User message 3');
-     // Corrected Expected Messages: System + relevantHistory (Assistant2) + newUser (User3)
-     // History before this call was [User2, Assistant2]. availableSlots = 2-1=1. historyCount=min(2,1)=1. relevantHistory=[Assistant2]
+     // Expected Payload: System + History BEFORE User3 (User2, Assistant2) + User3
+     // History before call: [User2, Assistant2]. historySize=2. Max past history = 2-1=1. Actual past = min(2,1)=1. History to add = [Assistant2].
     expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', expect.objectContaining({
       messages: [
         { role: 'system', content: 'System prompt.' },
-        // { role: 'user', content: 'User message 2' }, // User2 is pushed out
-        { role: 'assistant', content: 'Response 2' },
+        { role: 'assistant', content: 'Response 2' }, // Only Assistant2 fits
         { role: 'user', content: 'User message 3' }
       ]
     }), false);
-    // History check remains correct: [User3, Assistant3]
+    // Final History State Check: [User3, Assistant3] (This part remains correct)
     expect((chatModule as any).chatHistory).toEqual([
         { role: 'user', content: 'User message 3' },
         { role: 'assistant', content: 'Response 3' }
@@ -266,7 +319,7 @@ describe('ChatModule', () => {
         historySize: 5,
         top_p: 0.8,
       };
-      chatModule = new ChatModule(requestUtilMock, defaultOptions);
+      chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
       const requestMock = vi.spyOn(requestUtilMock, 'request');
       const mockResponse: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'default-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Default response' }, finish_reason: 'stop' }] };
       requestMock.mockResolvedValue(mockResponse);
@@ -306,7 +359,7 @@ describe('ChatModule', () => {
           // compliance defaults to true
           historySize: 3,
         };
-        chatModule = new ChatModule(requestUtilMock, defaultOptions);
+        chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         const mockResponse: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'default-model-send', choices: [{ index: 0, message: { role: 'assistant', content: 'Default send response' }, finish_reason: 'stop' }] };
         requestMock.mockResolvedValue(mockResponse);
@@ -330,7 +383,7 @@ describe('ChatModule', () => {
 
       it('should default compliance to true and return violations from response', async () => {
         // Instantiate without compliance in config
-        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system' });
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system' }, mockIsObserverConnected, mockSendObserverText);
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         // Mock response *with* violations
         const mockResponse: ChatCompletionResponse = {
@@ -369,7 +422,7 @@ describe('ChatModule', () => {
       });
 
       it('should send compliance: false when explicitly set in request', async () => {
-        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }); // Config defaults to true
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }, mockIsObserverConnected, mockSendObserverText); // Config defaults to true
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         // Mock response *without* violations (as compliance is off)
         const mockResponse: ChatCompletionResponse = {
@@ -406,7 +459,7 @@ describe('ChatModule', () => {
       });
 
       it('should send compliance: false when explicitly set in send options', async () => {
-        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }); // Config defaults to true
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }, mockIsObserverConnected, mockSendObserverText); // Config defaults to true
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         const mockResponse: ChatCompletionResponse = { id: 'r-comp-3', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Send non-compliant' }, finish_reason: 'stop' }] };
         requestMock.mockResolvedValue(mockResponse);
@@ -424,7 +477,13 @@ describe('ChatModule', () => {
         );
 
         // 2. Check the returned response does NOT include violations
-        expect(response.compliance_violations).toBeUndefined();
+        // Check response type before accessing property
+        if (response && 'compliance_violations' in response) {
+             expect(response.compliance_violations).toBeUndefined();
+        } else {
+             // This case shouldn't happen if observer mock is false, but good practice
+             expect(response).toBeDefined(); // Ensure it's not void if HTTP path taken
+        }
 
         requestMock.mockRestore();
       });
@@ -438,7 +497,7 @@ describe('ChatModule', () => {
         compliance: true,
         top_p: 0.8,
       };
-      chatModule = new ChatModule(requestUtilMock, defaultOptions);
+      chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
       const requestMock = vi.spyOn(requestUtilMock, 'request');
       const mockResponse: ChatCompletionResponse = { id: 'r-override-1', object: 'chat.completion', created: 1, model: 'override-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Override response' }, finish_reason: 'stop' }] };
       requestMock.mockResolvedValue(mockResponse);
@@ -472,6 +531,80 @@ describe('ChatModule', () => {
       requestMock.mockRestore();
     });
 
+it('should clean think tags and store reasoning when adding assistant message to history', () => {
+      // Initialize with history enabled
+      chatModule = new ChatModule(
+          requestUtilMock,
+          { model: 'test-model', systemMessage: 'Test', historySize: 5 },
+          mockIsObserverConnected,
+          mockSendObserverText
+      );
+
+      const rawAssistantContent = '<think>This is reasoning.</think> This is the visible content.';
+      const expectedCleanedContent = 'This is the visible content.';
+      const expectedReasoning = 'This is reasoning.';
+
+      // Call the public method that uses addMessageToHistory internally
+      chatModule.addAssistantResponseToHistory(rawAssistantContent);
+
+      // Verify the history state
+      const history = (chatModule as any).chatHistory;
+      expect(history.length).toBe(1);
+      expect(history[0]).toEqual({
+          role: 'assistant',
+          content: expectedCleanedContent,
+          reasoning: expectedReasoning
+      });
+    });
+
+    it('should handle assistant message with only think tags', () => {
+        chatModule = new ChatModule(
+            requestUtilMock,
+            { model: 'test-model', systemMessage: 'Test', historySize: 5 },
+            mockIsObserverConnected,
+            mockSendObserverText
+        );
+        const rawAssistantContent = '<think>Only reasoning here.</think>';
+        chatModule.addAssistantResponseToHistory(rawAssistantContent);
+        const history = (chatModule as any).chatHistory;
+        expect(history.length).toBe(1);
+        expect(history[0]).toEqual({
+            role: 'assistant',
+            content: '', // Content should be empty
+            reasoning: 'Only reasoning here.'
+        });
+    });
+
+    it('should handle assistant message with no think tags', () => {
+        chatModule = new ChatModule(
+            requestUtilMock,
+            { model: 'test-model', systemMessage: 'Test', historySize: 5 },
+            mockIsObserverConnected,
+            mockSendObserverText
+        );
+        const rawAssistantContent = 'Just normal content.';
+        chatModule.addAssistantResponseToHistory(rawAssistantContent);
+        const history = (chatModule as any).chatHistory;
+        expect(history.length).toBe(1);
+        expect(history[0]).toEqual({
+            role: 'assistant',
+            content: 'Just normal content.',
+            reasoning: undefined // No reasoning field expected
+        });
+    });
+
+    it('should not add empty assistant message without reasoning to history', () => {
+        chatModule = new ChatModule(
+            requestUtilMock,
+            { model: 'test-model', systemMessage: 'Test', historySize: 5 },
+            mockIsObserverConnected,
+            mockSendObserverText
+        );
+        const rawAssistantContent = '   '; // Whitespace only
+        chatModule.addAssistantResponseToHistory(rawAssistantContent);
+        const history = (chatModule as any).chatHistory;
+        expect(history.length).toBe(0); // History should remain empty
+    });
     it('should override configured defaults with send options', async () => {
         const defaultOptions = {
           model: 'default-model-send',
@@ -480,7 +613,7 @@ describe('ChatModule', () => {
           max_tokens: 99,
           compliance: true,
         };
-        chatModule = new ChatModule(requestUtilMock, defaultOptions);
+        chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         const mockResponse: ChatCompletionResponse = { id: 'r-override-2', object: 'chat.completion', created: 1, model: 'override-model-send', choices: [{ index: 0, message: { role: 'assistant', content: 'Override send response' }, finish_reason: 'stop' }] };
         requestMock.mockResolvedValue(mockResponse);
@@ -492,6 +625,87 @@ describe('ChatModule', () => {
             compliance: false,          // Override
             top_p: 0.7                  // New param, not in defaults
         });
+        
+        // --- Add tests specifically for the Observer path ---
+        // --- Add tests specifically for the Observer path ---
+        describe('ChatModule - Observer Integration', () => {
+            // No need for a separate beforeEach here if the main one resets mocks correctly
+            // We just need to set the observer mock state for these specific tests
+
+            it('should call sendObserverText with correct history payload based on configured historySize', async () => {
+                // Arrange: Set up history and observer mock
+                mockIsObserverConnected.mockReturnValue(true);
+                const testHistorySize = 2; // Define history size for this test case
+                chatModule = new ChatModule( // Re-init with specific historySize
+                    requestUtilMock,
+                    { ...defaultChatOptions, historySize: testHistorySize }, // Use the variable
+                    mockIsObserverConnected,
+                    mockSendObserverText
+                );
+                // Pre-populate history with more messages than testHistorySize to test slicing
+                const fullHistory = [
+                    { role: 'user', content: 'User message 1' },
+                    { role: 'assistant', content: 'Assistant message 1' },
+                    { role: 'user', content: 'User message 2' },
+                    { role: 'assistant', content: 'Assistant message 2' } // 4 messages total
+                ];
+                (chatModule as any).chatHistory = fullHistory;
+
+                const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
+                const newUserMessage = 'Observer test message';
+
+                // Act: Call send
+                await chatModule.send(newUserMessage);
+
+                // Assert: Check sendObserverText payload
+                expect(mockSendObserverText).toHaveBeenCalledTimes(1);
+
+                // Calculate expected history based on testHistorySize
+                const expectedHistoryCount = Math.min(fullHistory.length, testHistorySize); // Should be 2
+                const expectedHistoryMessages = fullHistory.slice(-expectedHistoryCount); // Should get last 2 messages
+
+                // Assert the payload sent to the observer
+                const expectedPayload = {
+                    messages: [
+                        { role: 'system', content: defaultChatOptions.systemMessage },
+                        ...expectedHistoryMessages, // Include the calculated history slice
+                        { role: 'user', content: newUserMessage } // New user message
+                    ],
+                    llm_params: { // Check default params are included
+                        model: defaultChatOptions.model
+                        // Add other expected default llm_params if configured
+                    }
+                };
+                expect(mockSendObserverText).toHaveBeenCalledWith(JSON.stringify(expectedPayload));
+
+                // Assert user message was added to internal history (this part remains the same)
+                expect(addMessageSpy).toHaveBeenCalledTimes(1);
+                expect(addMessageSpy).toHaveBeenCalledWith({ role: 'user', content: newUserMessage });
+
+                addMessageSpy.mockRestore();
+            });
+
+            it('should throw error from sendObserverText and NOT update history', async () => {
+                mockIsObserverConnected.mockReturnValue(true); // Set observer connected for this test
+                const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
+                const message = 'Hello Observer Fail';
+                const testError = new ApiError('Observer send failed', 0);
+                mockSendObserverText.mockRejectedValue(testError); // Simulate failure
+
+                await expect(chatModule.send(message)).rejects.toThrow(testError);
+
+                // Verify send was attempted
+                expect(mockIsObserverConnected).toHaveBeenCalledTimes(1);
+                expect(mockSendObserverText).toHaveBeenCalledTimes(1);
+                expect(mockSendObserverText).toHaveBeenCalledWith(expect.stringContaining(`"content":"${message}"`));
+                expect(requestUtilMock.request).not.toHaveBeenCalled();
+
+                // Verify history was NOT updated
+                expect(addMessageSpy).not.toHaveBeenCalled();
+
+                addMessageSpy.mockRestore();
+            });
+        }); // End Observer Integration describe
 
         expect(requestMock).toHaveBeenCalledWith(
           'POST',
