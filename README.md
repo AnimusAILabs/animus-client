@@ -283,20 +283,13 @@ client.on('streamChunk', (data) => {
     process.stdout.write(data.deltaContent);
   }
   
-  // Check for compliance violations in real-time
-  if (data.compliance_violations && data.compliance_violations.length > 0) {
-    console.warn("Compliance issue detected:", data.compliance_violations);
-    // Handle accordingly...
-  }
+  // Compliance violations are not sent in streaming chunks
 });
 
 client.on('streamComplete', (data) => {
   console.log("\nStream complete!");
   console.log("Final content:", data.fullContent);
-  // Check final compliance status
-  if (data.compliance_violations) {
-    console.warn("Final compliance status:", data.compliance_violations);
-  }
+  // Compliance violations are not sent in streaming chunks
 });
 
 client.on('streamError', (data) => {
@@ -624,18 +617,7 @@ client.on('streamChunk', (data) => {
 client.on('streamComplete', (data) => {
   console.log(`Stream complete from ${data.source}`);
   
-  // Final check for compliance
-  if (data.compliance_violations && data.compliance_violations.length > 0) {
-    console.warn(`Final compliance status: Violations detected: ${data.compliance_violations.join(', ')}`);
-    // Ensure UI shows warning
-    if (currentAssistantMessageElement) {
-      const warningElement = document.createElement('div');
-      warningElement.className = 'compliance-notice';
-      warningElement.textContent = `Content flagged for: ${data.compliance_violations.join(', ')}`;
-      currentAssistantMessageElement.appendChild(warningElement);
-    }
-  }
-  
+  // Compliance violations are not sent via streaming/observer events.
   // Finalize the UI message bubble (e.g., remove 'streaming' indicator)
   if (currentAssistantMessageElement) {
     currentAssistantMessageElement.classList.remove('streaming');
