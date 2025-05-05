@@ -131,10 +131,12 @@ export interface AnimusClientOptions {
 /** Identifies the source of a stream */
 export type StreamSource = 'observer' | 'http';
 
-/** Data payload for the 'streamChunk' event. */
-export interface StreamChunkData {
-    source: StreamSource;
-    /** The raw chunk object received from the API or Observer. */
+// --- Observer Stream Event Definitions (NEW) ---
+
+/** Data payload for the 'observerChunk' event. */
+export interface ObserverChunkData {
+    participantIdentity: string;
+    /** The raw chunk object received from the Observer. */
     chunk: ChatCompletionChunk;
     /** Content delta from the chunk, if any. */
     deltaContent?: string;
@@ -142,32 +144,33 @@ export interface StreamChunkData {
     compliance_violations?: string[] | null;
 }
 
-/** Data payload for the 'streamComplete' event. */
-export interface StreamCompleteData {
-    source: StreamSource;
-    /** Final aggregated content of the stream. */
+/** Data payload for the 'observerComplete' event. */
+export interface ObserverCompleteData {
+    participantIdentity: string;
+    /** Final aggregated content of the stream from the Observer. */
     fullContent: string;
-    /** Final usage statistics, if available. */
+    /** Final usage statistics, if available from the Observer stream. */
     usage?: ChatCompletionResponse['usage'] | null;
-    /** Final compliance violations status for the stream. */
+    /** Final compliance violations status for the Observer stream. */
     compliance_violations?: string[] | null;
 }
 
-/** Data payload for the 'streamError' event. */
-export interface StreamErrorData {
-    source: StreamSource;
-    /** The error message. */
+/** Data payload for the 'observerError' event. */
+export interface ObserverErrorData {
+    participantIdentity: string;
+    /** The error message related to the Observer stream. */
     error: string;
 }
 
-/** Defines the unified event map for the AnimusClient emitter. */
-export type AnimusClientEventMap = {
-    // Stream Events
-    streamChunk: (data: StreamChunkData) => void;
-    streamComplete: (data: StreamCompleteData) => void;
-    streamError: (data: StreamErrorData) => void;
 
-    // Observer Connection Status Events (can potentially keep these separate)
+/** Defines the event map for the AnimusClient emitter. */
+export type AnimusClientEventMap = {
+    // Observer Stream Events (NEW)
+    observerChunk: (data: ObserverChunkData) => void;
+    observerComplete: (data: ObserverCompleteData) => void;
+    observerStreamError: (data: ObserverErrorData) => void; // Renamed to avoid conflict
+
+    // Observer Connection Status Events
     observerConnecting: () => void;
     observerConnected: () => void;
     observerDisconnected: (reason?: string) => void; // Keep reason optional
@@ -451,14 +454,14 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
                       if (chunk === '[DONE]') {
                           // Get final content from the class member accumulator
                           const finalContent = this.currentStreamAccumulator[participantId] ?? '';
-                          // Use the new StreamCompleteData interface
-                          const completeData: StreamCompleteData = {
-                              source: 'observer',
+                          // Use the new ObserverCompleteData interface
+                          const completeData: ObserverCompleteData = {
+                              participantIdentity: participantId, // Add participant ID
                               fullContent: finalContent,
                               usage: finalUsage, // Include final usage
                               compliance_violations: streamComplianceViolations // Include final compliance status
                           };
-                          this.emit('streamComplete', completeData); // Emit unified event
+                          this.emit('observerComplete', completeData); // Emit observer-specific event
 
                           // --- Add Assistant Response to History ---
                           // Add to history ONLY if there were no compliance violations
@@ -521,9 +524,9 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
                               // 4. Handle errors if present in the chunk
                               if (errorMessage) {
                                   console.warn(`Observer: Received error in stream chunk from ${participantId}: ${errorMessage}`);
-                                  // Emit streamError and potentially stop processing this stream?
-                                  this.emit('streamError', {
-                                      source: 'observer',
+                                  // Emit observerStreamError
+                                  this.emit('observerStreamError', {
+                                      participantIdentity: participantId,
                                       error: `Received error in stream chunk: ${errorMessage}`
                                   });
                                   // Depending on desired behavior, you might 'continue' or 'break' here
@@ -533,14 +536,14 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
 
                               // --- Emit streamChunk ---
                               // Emit even if deltaContent is null, as chunk might contain metadata
-                              const chunkData: StreamChunkData = {
-                                  source: 'observer',
+                              const chunkData: ObserverChunkData = {
+                                  participantIdentity: participantId, // Add participant ID
                                   chunk: parsedChunk,
                                   deltaContent: deltaContent,
                                   // Pass the consistent compliance status with every chunk
                                   compliance_violations: streamComplianceViolations
                               };
-                              this.emit('streamChunk', chunkData); // Emit unified event
+                              this.emit('observerChunk', chunkData); // Emit observer-specific event
                               // --------------------------
 
                               // Accumulate content AFTER emitting the chunk
@@ -555,9 +558,9 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
 
                           } catch (parseError) {
                               console.warn(`Observer: Failed to parse chunk from ${participantId} as JSON: "${chunk}"`, parseError);
-                              // Emit unified streamError
-                              this.emit('streamError', {
-                                  source: 'observer',
+                              // Emit observerStreamError
+                              this.emit('observerStreamError', {
+                                  participantIdentity: participantId,
                                   error: `Failed to parse stream chunk: ${chunk}`
                               });
                           }
@@ -565,9 +568,9 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
                   }
               } catch (streamError) {
                   console.error(`Observer: Error reading stream from ${participantId}:`, streamError);
-                   // Emit unified streamError
-                  this.emit('streamError', {
-                      source: 'observer',
+                   // Emit observerStreamError
+                  this.emit('observerStreamError', {
+                      participantIdentity: participantId,
                       error: streamError instanceof Error ? streamError.message : String(streamError)
                   });
                   // Clean up accumulator on stream read error
@@ -651,133 +654,6 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
           // Re-throw a more specific error for the caller (ChatModule)
           // Use status 0 to indicate a non-HTTP error source
           throw new ApiError(`Failed to send message via LiveKit Observer: ${error instanceof Error ? error.message : String(error)}`, 0, error);
-      }
-  }
-
-  /**
-   * Process an HTTP streaming response for chat completions and emit unified events.
-   * @param response - The raw HTTP Response object from fetch
-   * @internal
-   */
-  public async processHttpStream(response: Response): Promise<void> {
-      if (!response.body) {
-          this.emit('streamError', {
-              source: 'http',
-              error: 'HTTP streaming response body is null'
-          });
-          return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      
-      let buffer = '';
-      let accumulatedContent = '';
-      let streamComplianceViolations: string[] | undefined = undefined;
-      let finalUsage: ChatCompletionResponse['usage'] | undefined = undefined;
-
-      try {
-          while (true) {
-              const { done, value } = await reader.read();
-              if (done) {
-                  break;
-              }
-
-              buffer += decoder.decode(value, { stream: true });
-
-              // Process buffer line by line
-              let lines = buffer.split('\n');
-              buffer = lines.pop() || ''; // Keep the last potentially incomplete line
-
-              for (const line of lines) {
-                  if (line.trim() === '') continue; // Skip empty lines
-
-                  if (line.startsWith('data: ')) {
-                      const data = line.substring(6).trim();
-                      if (data === '[DONE]') {
-                          // Stream finished via [DONE] signal
-                          const completeData: StreamCompleteData = {
-                              source: 'http',
-                              fullContent: accumulatedContent,
-                              usage: finalUsage,
-                              compliance_violations: streamComplianceViolations
-                          };
-                          this.emit('streamComplete', completeData);
-                          
-                          // Add to history only if no compliance violations
-                          this.chat.addAssistantResponseToHistory(accumulatedContent, streamComplianceViolations);
-                          return; // End the processing
-                      }
-
-                      try {
-                          const chunk = JSON.parse(data) as ChatCompletionChunk;
-                          
-                          // Extract content delta
-                          const deltaContent = chunk.choices?.[0]?.delta?.content;
-                          
-                          // Check for compliance violations
-                          if (chunk.compliance_violations) {
-                              streamComplianceViolations = chunk.compliance_violations;
-                              console.log(`[Animus SDK DEBUG] HTTP stream - Compliance violations detected:`, streamComplianceViolations);
-                          }
-                          
-                          // Check for usage info
-                          if (chunk.usage) {
-                              finalUsage = chunk.usage;
-                          }
-
-                          // Emit chunk event
-                          const chunkData: StreamChunkData = {
-                              source: 'http',
-                              chunk: chunk,
-                              deltaContent: deltaContent,
-                              compliance_violations: streamComplianceViolations
-                          };
-                          this.emit('streamChunk', chunkData);
-                          
-                          // Accumulate content
-                          if (deltaContent) {
-                              accumulatedContent += deltaContent;
-                          }
-                      } catch (e) {
-                          console.error('[Animus SDK] Failed to parse HTTP stream chunk:', data, e);
-                          this.emit('streamError', {
-                              source: 'http',
-                              error: `Failed to parse stream chunk: ${e instanceof Error ? e.message : String(e)}`
-                          });
-                      }
-                  } else {
-                      console.warn('[Animus SDK] Received non-data line in HTTP stream:', line);
-                  }
-              }
-          }
-
-          // Process any remaining buffer content if stream ended without [DONE]
-          if (buffer.trim() !== '') {
-              // Similar processing as above...
-              // (Code omitted for brevity but would be similar to the loop body)
-          }
-
-          // If the stream ended without [DONE], still emit streamComplete
-          const completeData: StreamCompleteData = {
-              source: 'http',
-              fullContent: accumulatedContent,
-              usage: finalUsage,
-              compliance_violations: streamComplianceViolations
-          };
-          this.emit('streamComplete', completeData);
-          
-          // Add to history only if no compliance violations
-          this.chat.addAssistantResponseToHistory(accumulatedContent, streamComplianceViolations);
-
-      } catch (error) {
-          console.error('[Animus SDK] Error processing HTTP stream:', error);
-          this.emit('streamError', {
-              source: 'http',
-              error: error instanceof Error ? error.message : String(error)
-          });
-      } finally {
-          reader.releaseLock();
       }
   }
 }

@@ -29,7 +29,7 @@ yarn add animus-client
 ## Prerequisites: Secure Token Endpoint
 
 **Important:** To maintain security, this SDK does **not** handle your organization's Animus API key directly in the browser. You **must** create a secure backend endpoint (referred to as the `tokenProviderUrl` in the SDK configuration) that:
- 
+
 1.  Securely stores your organization's unique **Animus API key**.
 2.  Receives a request from this SDK. (Your backend might perform its own user authentication here).
 3.  Calls the central **Animus Auth Service** (`https://api.animusai.co/auth/generate-token`) using your stored Animus API key in the `apikey` header.
@@ -41,7 +41,7 @@ yarn add animus-client
    }
    ```
    *(The token's expiry is included within the JWT payload itself (`exp` claim) and is handled internally by the SDK).*
- 
+
 An example Node.js/Express implementation demonstrating how this backend endpoint can securely call the central Animus Auth Service is provided in the `/examples/auth-server` directory of this repository. This example acts as a secure intermediary.
 
 ## Usage
@@ -77,20 +77,23 @@ async function main() {
     console.log('Chat Response:', chatResponse.choices[0].message.content);
 
     // --- Example: Streaming Chat Completion ---
-    const stream = await client.chat.completions({
+    // Set up listeners first (see API Documentation -> Streaming Events)
+    client.on('streamChunk', (data) => {
+        if (data.deltaContent) process.stdout.write(data.deltaContent);
+    });
+    client.on('streamComplete', (data) => {
+        console.log('\nStream finished. Full content:', data.fullContent);
+    });
+    client.on('streamError', (data) => {
+        console.error('\nStream error:', data.error);
+    });
+
+    // Start the stream (returns AsyncIterable, but events handle UI updates)
+    await client.chat.completions({
       messages: messages,
       stream: true
     });
 
-    console.log('Streaming Chat Response:');
-    let fullResponse = '';
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      fullResponse += content;
-      process.stdout.write(content); // Or update UI incrementally
-    }
-    console.log('\nStream finished.');
-    // fullResponse contains the complete streamed message
 
     // --- Example: Media Analysis (Image) ---
     const imageAnalysis = await client.media.analyze({
@@ -146,7 +149,7 @@ const client = new AnimusClient({
     systemMessage: 'You are Animus, a helpful AI assistant.', // Required: Default system prompt
 
     // --- Optional API Parameter Defaults ---
-    temperature: 0.7,       
+    temperature: 0.7,
     // top_p: 1.0,          // Default: 1
     // n: 1,                // Default: 1 (Number of choices - typically 1 for chat)
     max_tokens: 500,        // No API default (model-specific), SDK sets example
@@ -159,7 +162,7 @@ const client = new AnimusClient({
     // repetition_penalty: 1.0, // Default: 1
     // min_p: 0.0,          // Default: 0
     // length_penalty: 1.0, // Default: 1
-    compliance: true,       // Default: false (Enables content moderation)
+    compliance: true,       // Default: true (Enables content moderation)
 
     // --- Optional SDK Specific ---
     historySize: 30         // Default: 0 (disabled) number of turns to send to the LLM for conversational context
@@ -171,10 +174,14 @@ const client = new AnimusClient({
     // temperature: 0.2 // Optional vision default
   },
 
+  // Optional: Configure Observer connection
+  observer: {
+      enabled: true // Set to true to enable Observer feature
+  },
+
   // Optional: Other top-level settings
   // apiBaseUrl: 'https://api.animusai.co/v3',
   // tokenStorage: 'localStorage', // 'sessionStorage' is default
-  // historySize: 10 // Default is 0 (disabled), requires chat config
 });
 ```
 
@@ -183,7 +190,6 @@ const client = new AnimusClient({
 *   `tokenProviderUrl` (**required**, `string`): The URL of your secure backend endpoint that provides Animus access tokens.
 *   `apiBaseUrl` (optional, `string`): Overrides the default Animus API endpoint (`https://api.animusai.co/v3`).
 *   `tokenStorage` (optional, `'sessionStorage' | 'localStorage'`): Choose where to store the auth token (default: `'sessionStorage'`).
-*   `historySize` (optional, `number`): Enables automatic chat history management if set > 0. Requires `chat` configuration to be present. Default is `0` (disabled).
 *   `chat` (optional, `AnimusChatOptions`): If provided, enables chat features and sets defaults for chat requests.
     *   `model` (**required**, `string`): Default model ID (e.g., `"animuslabs/Vivian-llama3.1-70b-1.0-fp8"`).
     *   `systemMessage` (**required**, `string`): Default system prompt.
@@ -235,14 +241,22 @@ import { ApiError, AuthenticationError } from 'animus-client';
 
 // Assumes client was initialized with chat options (model, systemMessage)
 try {
+  // If Observer is connected, this returns void and response comes via stream* events.
+  // If Observer is NOT connected, this returns the ChatCompletionResponse directly.
   const response = await client.chat.send(
     "Tell me about the Animus Client SDK.",
-    { // Optional overrides for this specific request
+    { // Optional overrides for this specific request (used only in HTTP fallback)
       temperature: 0.8,
       // model: 'specific-model-override' // Can override model here too
     }
   );
-  console.log("AI:", response.choices[0].message.content);
+
+  if (response) { // Handle the direct HTTP response if Observer wasn't connected
+      console.log("AI (HTTP Fallback):", response.choices[0].message.content);
+      // Check compliance violations if needed: response.compliance_violations
+  } else {
+      console.log("Message sent via Observer. Waiting for stream events...");
+  }
 
 } catch (error) {
   // Handle errors (see Error Handling section)
@@ -250,7 +264,7 @@ try {
   else console.error("Error:", error);
 }
 ```
-*   **Note:** If the LiveKit Observer is enabled and connected (see Section 5), `send()` will route the message through the observer. In this case, the `send()` method will return `undefined` immediately, and the response chunks/completion will arrive via the `observerMessage` and `observerStreamComplete` events. History (including reasoning extraction) is updated automatically when the stream completes. If the observer is not connected, `send()` falls back to standard HTTP request/response and does *not* support streaming via this method.
+*   **Behavior:** If the LiveKit Observer is enabled and connected (see Section 5), `send()` routes the message via the observer, returns `undefined` immediately, and the response arrives via the unified `streamChunk`/`streamComplete`/`streamError` events. If the observer is not connected, `send()` falls back to a standard non-streaming HTTP request and returns the `ChatCompletionResponse`.
 
 **b) Full Completions (`client.chat.completions`)**
 
@@ -270,39 +284,27 @@ try {
   const response = await client.chat.completions({
     messages: messages,
     model: 'override-model-if-needed', // Optional: overrides configured default
-    max_tokens: 100 // Optional override
+    max_tokens: 100, // Optional override
+    stream: false // Explicitly non-streaming
   });
   console.log("AI Poem:", response.choices[0].message.content);
+  // Check compliance violations if needed: response.compliance_violations
 } catch (error) { /* ... */ }
 
 // Streaming (Event-based):
-// Set up event listeners first
-client.on('streamChunk', (data) => {
-  // Process each chunk
-  if (data.deltaContent) {
-    process.stdout.write(data.deltaContent);
-  }
-  
-  // Compliance violations are not sent in streaming chunks
-});
+// Set up event listeners first (see Section 5c: Unified Streaming Events)
+// client.on('streamChunk', ...);
+// client.on('streamComplete', ...);
+// client.on('streamError', ...);
 
-client.on('streamComplete', (data) => {
-  console.log("\nStream complete!");
-  console.log("Final content:", data.fullContent);
-  // Compliance violations are not sent in streaming chunks
-});
-
-client.on('streamError', (data) => {
-  console.error("Stream error:", data.error);
-});
-
-// Start the stream - this doesn't return content directly
-// Instead, it triggers the events above
+// Start the stream - this doesn't return content directly via await
+// Instead, it triggers the events above.
 try {
   await client.chat.completions({
     messages: messages,
     stream: true // Enable streaming
   });
+  console.log("Streaming request initiated. Waiting for events...");
 } catch (error) { /* ... */ }
 ```
 
@@ -311,90 +313,63 @@ try {
 
 **c) Chat History Management**
 
-The SDK provides methods to manipulate the conversation history directly, allowing UIs to stay in sync with the SDK's internal state:
+The SDK provides methods to manipulate the conversation history directly:
 
 ```typescript
 // Get copy of current chat history
 const history = client.chat.getChatHistory();
-console.log(`Current chat has ${history.length} messages`);
 
-// Replace entire history (e.g. when loading a saved conversation)
-// Second parameter (validate) is optional, defaults to true
+// Replace entire history
 const importCount = client.chat.setChatHistory(savedConversation, true);
-console.log(`Imported ${importCount} messages`);
 
 // Update a specific message
-const updateSuccess = client.chat.updateHistoryMessage(2, {
-  content: "Updated content",
-  name: "CustomName"
-});
+const updateSuccess = client.chat.updateHistoryMessage(2, { content: "Updated" });
 
 // Delete a specific message
 const deleteSuccess = client.chat.deleteHistoryMessage(3);
 
 // Clear all history
 const clearedCount = client.chat.clearChatHistory();
-console.log(`Cleared ${clearedCount} messages`);
 ```
-
-These methods enable several powerful UI features:
-- Loading saved conversations from external storage
-- Editing message content displayed in the UI while keeping the SDK in sync
-- Removing specific messages from the conversation
-- "Forgetting" the entire conversation history
-
-When updating assistant messages that contain `<think>...</think>` tags, the SDK automatically processes them to extract reasoning, just like it does for new messages.
 
 ---
 
 ### 3. Content Compliance (Chat Moderation)
 
-The Animus API integrates content moderation directly into the chat completions endpoint via the `compliance` parameter.
+The Animus API integrates content moderation via the `compliance` parameter.
 
-*   **Enabling:** Set `compliance: true` in the `AnimusChatOptions` during client initialization (this is the default) or within a specific `client.chat.completions` or `client.chat.send` request.
-*   **Disabling:** Set `compliance: false` to bypass moderation checks.
-*   **Response:** When enabled and violations are detected, the response will include a `compliance_violations` field, which is an array of strings indicating the detected categories (e.g., `["drug_use", "gore"]`).
-
-**Note:** Content moderation (`compliance: true`) is currently **only supported for non-streaming requests** (`stream: false`). Streaming requests will ignore the `compliance` flag, and no `compliance_violations` will be returned via stream events.
+*   **Enabling:** Set `compliance: true` during client initialization (default) or in a specific request.
+*   **Disabling:** Set `compliance: false`.
+*   **Response:** When enabled and violations are detected in **non-streaming** responses, the `ChatCompletionResponse` will include a `compliance_violations` field (e.g., `["drug_use", "gore"]`).
+*   **Streaming:** Content moderation (`compliance: true`) is **not supported for streaming requests** (HTTP or Observer). The `compliance` flag is ignored, and no `compliance_violations` will be returned via `streamChunk` or `streamComplete` events.
+*   **History:** Responses with compliance violations (from non-streaming requests) are automatically **not** added to the internal conversation history.
 
 #### Non-streaming Compliance Detection
 
-For non-streaming responses (`stream: false`), check the `compliance_violations` field in the response object:
-
 ```typescript
-const response = await client.chat.send("Some potentially non-compliant text."); // send() is always non-streaming
-
-// Or using completions:
-// const response = await client.chat.completions({
-//   messages: [{ role: 'user', content: 'Some potentially non-compliant text.' }],
-//   stream: false, // Ensure stream is false
-//   compliance: true // Ensure compliance is true
-// });
-
-
-if (response.compliance_violations && response.compliance_violations.length > 0) {
+// Using send() (always non-streaming if it returns a response)
+const response = await client.chat.send("Some potentially non-compliant text.");
+if (response?.compliance_violations?.length > 0) { // Check if response exists and has violations
   console.warn("Content violations detected:", response.compliance_violations);
-  // Handle the violation (e.g., notify user, discard response)
-} else {
-  // No violations detected, proceed with the response content
+} else if (response) {
   console.log("AI:", response.choices[0].message.content);
+}
+
+// Using completions()
+const responseComp = await client.chat.completions({
+  messages: [{ role: 'user', content: 'Some potentially non-compliant text.' }],
+  stream: false, // Ensure stream is false
+  compliance: true // Ensure compliance is true
+});
+if (responseComp.compliance_violations && responseComp.compliance_violations.length > 0) {
+  console.warn("Content violations detected:", responseComp.compliance_violations);
+} else {
+  console.log("AI:", responseComp.choices[0].message.content);
 }
 ```
 
-#### Automatic History Management
-
-The SDK automatically handles compliance violations for chat history:
-
-* Responses with compliance violations are not added to the internal conversation history
-* This prevents problematic content from being included in the context window for future requests
-* No additional code is required for this behavior
-
-*   **Violation Categories:** The system can detect categories such as `pedophilia`, `beastiality`, `murder`, `rape`, `incest`, `gore`, `prostitution`, and `drug_use`.
-*   **Best Practices:**
-    *   Keep `compliance: true` (the default) for user-generated content.
-    *   Implement user-friendly handling for flagged content.
-    *   Consider basic client-side filtering for obvious violations.
-    *   Review flagged content periodically to understand patterns.
+*   **Violation Categories:** `pedophilia`, `beastiality`, `murder`, `rape`, `incest`, `gore`, `prostitution`, `drug_use`.
+*   **Best Practices:** Keep `compliance: true` (default); implement user-friendly handling; consider client-side filtering; review flagged content.
 
 ---
 
@@ -404,56 +379,41 @@ Interact with vision models. Accessed via `client.media`. Requires `vision` opti
 
 **a) Media Completions (`client.media.completions`)**
 
-Ask questions about images. Uses the configured `vision.model` unless overridden in the request.
+Ask questions about images.
 
 ```typescript
 import { MediaMessage } from 'animus-client';
 
-// Assumes client was initialized with vision options (model)
 const visionMessages: MediaMessage[] = [
   { role: 'user', content: [
     { type: 'text', text: 'Describe this image.' },
     { type: 'image_url', image_url: { url: 'https://example.com/image.jpg' } }
-    // Can also use base64 data URI: url: 'data:image/jpeg;base64,...'
   ]}
 ];
-
-try {
-  const response = await client.media.completions({
-    messages: visionMessages,
-    model: 'override-vision-model-if-needed' // Optional: overrides configured default
-  });
-  console.log("Vision Response:", response.choices[0].message.content);
-} catch (error) { /* ... */ }
+const response = await client.media.completions({ messages: visionMessages });
+console.log("Vision Response:", response.choices[0].message.content);
 ```
 
 *   **Key Types:** `MediaMessage`, `MediaCompletionRequest`, `MediaCompletionResponse`.
 
 **b) Media Analysis (`client.media.analyze`)**
 
-Extract metadata from images or videos. Uses the configured `vision.model` unless overridden in the request.
+Extract metadata from images or videos.
 
 ```typescript
 // Image Analysis
-try {
-  const imageAnalysis = await client.media.analyze({
-    media_url: 'https://example.com/image.jpg',
-    metadata: ['categories', 'tags'], // Specify desired metadata types
-    // model: 'override-analysis-model' // Optional: overrides configured default
-  });
-  console.log('Image Categories:', imageAnalysis.metadata?.categories);
-} catch (error) { /* ... */ }
+const imageAnalysis = await client.media.analyze({
+  media_url: 'https://example.com/image.jpg',
+  metadata: ['categories', 'tags']
+});
+console.log('Image Categories:', imageAnalysis.metadata?.categories);
 
 // Video Analysis (starts polling)
-try {
-  console.log("Starting video analysis...");
-  const videoAnalysis = await client.media.analyze({
-    media_url: 'https://example.com/video.mp4',
-    metadata: ['actions', 'scene']
-    // model: 'override-analysis-model' // Optional: overrides configured default
-  });
-  console.log('Video Actions:', videoAnalysis.results?.[0]?.actions);
-} catch (error) { /* ... */ }
+const videoAnalysis = await client.media.analyze({
+  media_url: 'https://example.com/video.mp4',
+  metadata: ['actions', 'scene']
+});
+console.log('Video Actions:', videoAnalysis.results?.[0]?.actions);
 ```
 
 *   **Key Types:** `MediaAnalysisRequest`, `MediaAnalysisResultResponse`.
@@ -463,11 +423,9 @@ try {
 Manually check the status of a video analysis job.
 
 ```typescript
-try {
-  const jobId = 'some_job_id_from_analyze';
-  const status = await client.media.getAnalysisStatus(jobId);
-  console.log(`Job ${jobId} Status: ${status.status}, Progress: ${status.percent_complete}%`);
-} catch (error) { /* ... */ }
+const jobId = 'some_job_id_from_analyze';
+const status = await client.media.getAnalysisStatus(jobId);
+console.log(`Job ${jobId} Status: ${status.status}, Progress: ${status.percent_complete}%`);
 ```
 
 *   **Key Type:** `MediaAnalysisStatusResponse`.
@@ -476,7 +434,7 @@ try {
 
 ### 5. Authentication (`client.clearAuthToken`)
 
-Manually clear the stored authentication token.
+Manually clear the stored authentication token. Also disconnects the observer if connected.
 
 ```typescript
 client.clearAuthToken();
@@ -484,232 +442,137 @@ client.clearAuthToken();
 
 ---
 
-### 5. LiveKit Observer (Real-time Communication)
+### 6. LiveKit Observer & Unified Streaming Events
 
-The SDK includes optional support for real-time, low-latency communication with compatible Animus agents using LiveKit. This is primarily used for streaming responses back to the client efficiently.
+The SDK includes optional support for real-time, low-latency communication with compatible Animus agents using LiveKit. When enabled, the SDK attempts to route chat messages (`client.chat.send`) via this connection.
 
 **a) Enabling the Observer**
 
-To enable the observer, provide the `observer` configuration object with `enabled: true` during client initialization:
+Provide the `observer` configuration object with `enabled: true` during client initialization:
 
 ```typescript
 const client = new AnimusClient({
   tokenProviderUrl: '...',
   chat: { /* ... */ },
   observer: {
-    enabled: true
+    enabled: true // Enable the observer feature
   }
+  // ... other options
 });
 ```
 
-**b) Manual Connection & Disconnection**
+**b) Connection Management**
 
-Unlike other features, the observer connection **must be initiated manually** after the client is created.
+The SDK manages the LiveKit connection lifecycle internally when `observer.enabled` is `true`. You **must manually initiate** the connection after creating the client:
 
-```typescript
-async function connectAndSetupObserver() {
-  if (!client.options.observer?.enabled) return; // Check if enabled
+*   **Manual Connection:** `await client.connectObserverManually();`
+*   **Manual Disconnection:** `await client.disconnectObserverManually();`
+*   **Connection Status Events:** Listen for `observerConnecting`, `observerConnected`, `observerDisconnected`, `observerReconnecting`, `observerReconnected`, and `observerError` events on the `client` instance to track the connection state.
 
-  try {
-    console.log("Connecting observer...");
-    await client.connectObserverManually();
-    console.log("Observer connection initiated successfully.");
-    // Setup event listeners now or after the 'observerConnected' event fires
-  } catch (error) {
-    console.error("Failed to connect observer:", error);
-  }
-}
+**c) Unified Streaming Events**
 
-async function disconnectObserver() {
-   if (!client.options.observer?.enabled) return;
+Whether a response comes via the Observer or standard HTTP streaming (`client.chat.completions({ stream: true })`), the SDK uses a **unified set of events** emitted by the `AnimusClient` instance:
 
-   try {
-     console.log("Disconnecting observer...");
-     await client.disconnectObserverManually();
-     console.log("Observer disconnected.");
-   } catch (error) {
-     console.error("Failed to disconnect observer:", error);
-   }
-}
-
-// Example usage:
-// connectAndSetupObserver();
-// Later...
-// disconnectObserver();
-```
-
-**c) Streaming Events**
-
-The `AnimusClient` instance is an `EventEmitter` that emits events for both Observer connections and streaming data.
-
-*Unified Streaming Events (for both HTTP API and Observer):*
-
-*   `streamChunk`: Fired for each content chunk received from either the HTTP API or Observer stream. Contains:
-    * `source`: Either `'observer'` or `'http'` to identify the source
-    * `chunk`: The raw chunk object
-    * `deltaContent`: The content delta from this chunk (if any)
-    * `compliance_violations`: Any compliance violations detected in the stream
-    
-*   `streamComplete`: Fired when a stream successfully completes. Contains:
-    * `source`: Either `'observer'` or `'http'` to identify the source
-    * `fullContent`: The complete aggregated content
-    * `usage`: Final usage statistics if available
-    * `compliance_violations`: Final compliance violations status
-    
-*   `streamError`: Fired when a stream encounters an error. Contains:
-    * `source`: Either `'observer'` or `'http'` to identify the source
-    * `error`: The error message
-
-*Observer Connection Events:*
-
-*   `observerConnecting`: Fired when the Observer connection attempt begins.
-*   `observerConnected`: Fired when the Observer connection is successfully established.
-*   `observerDisconnected`: Fired when the Observer connection is lost or closed.
-*   `observerReconnecting`: Fired when attempting to automatically reconnect.
-*   `observerReconnected`: Fired when successfully reconnected.
-*   `observerError`: Fired when a connection-related error occurs.
-
-**Note:** Streaming (both HTTP and Observer) now uses the same event-based interface. Set up listeners for the unified events and call `client.chat.completions({ stream: true, ... })` to start the stream.
-
-**d) Handling Streaming Responses (UI Example)**
-
-Here's a basic example of how a UI might accumulate streamed chat responses using the unified streaming events. Note that history management (including reasoning extraction and compliance checks) happens automatically within the SDK.
+*   `streamChunk`: Fired for each piece of data received. Contains `source` ('observer'|'http'), `chunk` (raw data), `deltaContent`, `compliance_violations`.
+*   `streamComplete`: Fired when the stream finishes successfully. Contains `source`, `fullContent`, `usage`, `compliance_violations`.
+*   `streamError`: Fired if an error occurs during the stream. Contains `source`, `error` (message).
 
 ```typescript
-let currentAssistantMessageElement = null; // Reference to the UI element being updated
-let hasComplianceViolations = false; // Track if the current stream has violations
+import { StreamChunkData, StreamCompleteData, StreamErrorData } from 'animus-client';
 
-// Set up event listeners for the unified streaming events
-client.on('streamChunk', (data) => {
-  console.log('Received stream chunk:', data);
+let currentAssistantResponse = ''; // Accumulator
 
-  // Check for compliance violations
-  if (data.compliance_violations && data.compliance_violations.length > 0) {
-    hasComplianceViolations = true;
-    console.warn(`Compliance violation detected: ${data.compliance_violations.join(', ')}`);
-    
-    // You might want to handle this by:
-    if (currentAssistantMessageElement) {
-      currentAssistantMessageElement.classList.add('compliance-warning');
-      // Add a visual indicator
-      const warningIcon = document.createElement('span');
-      warningIcon.className = 'warning-icon';
-      warningIcon.textContent = '⚠️ ';
-      currentAssistantMessageElement.prepend(warningIcon);
-    }
-  }
-
-  // Process content delta if present
+client.on('streamChunk', (data: StreamChunkData) => {
+  console.log(`Chunk from ${data.source}:`, data.chunk); // data.source is 'observer' or 'http'
   if (data.deltaContent) {
-    if (!currentAssistantMessageElement) {
-      // First chunk with content - create the UI element
-      currentAssistantMessageElement = createNewAssistantBubble(); // Your UI function
-      console.log("Starting new response display...");
-    }
-    
-    // Continue to display content even if compliance issues were detected
-    // (or you could choose not to display content with violations)
-    currentAssistantMessageElement.textContent += data.deltaContent;
-    // Scroll UI if needed
+    currentAssistantResponse += data.deltaContent;
+    // Update UI incrementally
   }
+  // Note: Compliance violations are typically only sent with non-streaming responses
 });
 
-client.on('streamComplete', (data) => {
-  console.log(`Stream complete from ${data.source}`);
-  
-  // Compliance violations are not sent via streaming/observer events.
-  // Finalize the UI message bubble (e.g., remove 'streaming' indicator)
-  if (currentAssistantMessageElement) {
-    currentAssistantMessageElement.classList.remove('streaming');
-    currentAssistantMessageElement.classList.add('complete');
+client.on('streamComplete', (data: StreamCompleteData) => {
+  console.log(`Stream complete from ${data.source}:`, data);
+  // Finalize UI update with data.fullContent
+  // SDK handles history update internally
+
+  currentAssistantResponse = ''; // Reset accumulator
+});
+
+client.on('streamError', (data: StreamErrorData) => {
+  console.error(`Stream error from ${data.source}:`, data.error);
+  // Update UI to show error
+  currentAssistantResponse = ''; // Reset accumulator
+});
+
+// --- Triggering Streams ---
+
+// 1. Via Observer (if connected) using chat.send()
+//    Returns void, response comes via stream* events above.
+try {
+    // Ensure observer is connected first via connectObserverManually() and 'observerConnected' event
+    await client.chat.send("Hello via observer!");
+} catch(e) { /* handle send error */ }
+
+
+// 2. Via HTTP using chat.completions()
+//    Also emits stream* events above.
+try {
+    await client.chat.completions({
+        messages: [{ role: 'user', content: 'Hello via HTTP stream!' }],
+        stream: true
+    });
+} catch(e) { /* handle completions error */ }
+
+```
+
+**d) Sending Messages via `client.chat.send()`**
+
+When the observer is enabled and connected, `client.chat.send(messageContent)`:
+1.  Constructs the payload (system message, history, user message).
+2.  Sends it via the LiveKit data channel.
+3.  Returns `undefined` immediately.
+4.  The response arrives via the unified `streamChunk`, `streamComplete`, and `streamError` events.
+
+If the observer is *not* connected, `client.chat.send()` falls back to a standard non-streaming HTTP API request and returns the `ChatCompletionResponse` directly (no stream events are emitted in this fallback case).
+
+---
+
+### 7. Error Handling
+
+The SDK throws specific error types:
+
+*   `AuthenticationError`: Issues related to fetching or validating the access token (e.g., invalid `tokenProviderUrl`, token expiry).
+*   `ApiError`: Errors returned directly from the Animus API (e.g., invalid request parameters, model errors). Includes `status` code and `errorData`.
+*   Standard `Error`: For other issues like network problems or configuration errors.
+
+Use `try...catch` blocks and check the error type using `instanceof`.
+
+```typescript
+try {
+  // SDK call...
+} catch (error) {
+  if (error instanceof AuthenticationError) {
+    console.error('Auth Error:', error.message);
+  } else if (error instanceof ApiError) {
+    console.error(`API Error (${error.status}):`, error.message, error.errorData);
+  } else {
+    console.error('Unexpected Error:', error);
   }
-  
-  currentAssistantMessageElement = null; // Reset UI element tracker
-  hasComplianceViolations = false; // Reset for next stream
-  // Re-enable UI input, etc.
-});
-
-client.on('streamError', (data) => {
-  console.error(`Stream error (${data.source}): ${data.error}`);
-  
-  // Handle error in UI
-  if (currentAssistantMessageElement) {
-    currentAssistantMessageElement.textContent += `\n--- ERROR: ${data.error} ---`;
-    currentAssistantMessageElement.classList.add('error'); // Example style
-  }
-  
-  // Reset state
-  currentAssistantMessageElement = null;
-  hasComplianceViolations = false;
-  // Re-enable UI input, etc.
-});
-
-// Connection event handling for Observer
-client.on('observerConnected', () => {
-  console.log("Observer connected! Ready for real-time messages.");
-  // Enable UI elements that depend on the observer connection
-});
-
-client.on('observerDisconnected', () => {
-  console.log("Observer disconnected");
-  // Disable UI elements, reset streaming state if necessary
-  currentAssistantMessageElement = null;
-});
-
-// Remember to call connectObserverManually() to start the observer connection!
-
-function createNewAssistantBubble() {
-    // Your implementation to add a new message element to the chat UI
-    const bubble = document.createElement('div');
-    bubble.className = 'assistant-message streaming';
-    document.getElementById('chat-container').appendChild(bubble);
-    return bubble;
 }
 ```
 
 ---
-
-### 6. Error Handling
-
-SDK methods can throw specific errors:
-
-*   `AuthenticationError`: Problem fetching the token from your `tokenProviderUrl`.
-*   `ApiError`: An error returned by the Animus API. Contains `status`, `message`, `errorData`.
-*   `Error`: General configuration errors (e.g., missing required model or system message in config when using dependent methods).
-
-```typescript
-import { ApiError, AuthenticationError } from 'animus-client';
-
-try {
-  // ... SDK call ...
-} catch (error) {
-  if (error instanceof AuthenticationError) {
-    console.error('Authentication failed:', error.message);
-  } else if (error instanceof ApiError) {
-    console.error(`API Error (${error.status}):`, error.message, error.errorData);
-  } else if (error instanceof Error) { // Catch config errors
-    console.error('Configuration or Usage Error:', error.message);
-  } else {
-    console.error('An unexpected error occurred:', error);
-  }
-}
-```
 
 ## Automated Releases
 
-This project uses [semantic-release](https://github.com/semantic-release/semantic-release) to automate the package release process. Releases are triggered automatically on pushes to the `main` branch.
-
-- **Versioning:** Version numbers are determined automatically based on commit messages following the [Conventional Commits](https://www.conventionalcommits.org/) specification.
-- **Changelog:** A `CHANGELOG.md` file is automatically generated and updated with each release.
-- **Publishing:** New versions are automatically published to npm and a GitHub Release is created.
-
-Ensure your commit messages follow the Conventional Commits format to trigger releases correctly (e.g., `feat: Add new feature`, `fix: Correct a bug`, `docs: Update documentation`). Commits like `chore: ...` or `refactor: ...` will not trigger a release unless they include breaking changes in the commit body/footer.
-
----
+This project uses `semantic-release` for automated versioning and package publishing. Commits following the [Conventional Commits specification](https://www.conventionalcommits.org/) trigger releases based on the commit type (`fix:` for patches, `feat:` for minor versions, `BREAKING CHANGE:` for major versions).
 
 ## Development
 
 1.  Clone the repository.
 2.  Install dependencies: `npm install`
-3.  Build the SDK: `npm run build`
-4.  Run in watch mode: `npm run dev`
+3.  Build the SDK: `npm run build` (outputs to `dist/`)
+4.  Run tests: `npm test`
+5.  Run example auth server: `cd examples/auth-server && npm install && npm start`
+6.  Open `examples/test-sdk/index.html` in your browser to test the SDK.

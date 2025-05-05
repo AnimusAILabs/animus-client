@@ -56,19 +56,20 @@ describe('ChatModule History Management', () => {
     
     // Verify history content
     expect(history).toHaveLength(2);
-    expect(history[0].role).toBe('user');
-    expect(history[0].content).toBe('Hello');
-    expect(history[1].role).toBe('assistant');
-    expect(history[1].content).toBe('Hi there!');
+    expect(history[0]!.role).toBe('user');
+    expect(history[0]!.content).toBe('Hello');
+    expect(history[1]!.role).toBe('assistant');
+    expect(history[1]!.content).toBe('Hi there!');
     
     // Verify it's a deep copy (modifying returned history shouldn't affect internal state)
-    history[0].content = 'Modified!';
+    history[0]!.content = 'Modified!'; // Add non-null assertion
     const newHistory = chatModule.getChatHistory();
-    expect(newHistory[0].content).toBe('Hello'); // Original still intact
+    expect(newHistory[0]!.content).toBe('Hello'); // Original still intact // Add non-null assertion
   });
 
   it('should set chat history with validation', () => {
-    const newHistory = [
+    // Explicitly type the array
+    const newHistory: ChatMessage[] = [
       userMessage2,
       assistantMessage2,
       { role: 'user', content: 'Another question' }
@@ -81,9 +82,9 @@ describe('ChatModule History Management', () => {
     // Verify new history
     const retrievedHistory = chatModule.getChatHistory();
     expect(retrievedHistory).toHaveLength(3);
-    expect(retrievedHistory[0].role).toBe('user');
-    expect(retrievedHistory[0].content).toBe('How are you?');
-    expect(retrievedHistory[2].content).toBe('Another question');
+    expect(retrievedHistory[0]!.role).toBe('user'); // Add non-null assertion
+    expect(retrievedHistory[0]!.content).toBe('How are you?'); // Add non-null assertion
+    expect(retrievedHistory[2]!.content).toBe('Another question'); // Add non-null assertion
   });
 
   it('should update history message', () => {
@@ -97,9 +98,9 @@ describe('ChatModule History Management', () => {
     
     // Verify update
     const history = chatModule.getChatHistory();
-    expect(history[0].content).toBe('Updated content');
-    expect(history[0].name).toBe('TestUser');
-    expect(history[0].role).toBe('user'); // Role preserved
+    expect(history[0]!.content).toBe('Updated content'); // Add non-null assertion
+    expect(history[0]!.name).toBe('TestUser'); // Add non-null assertion
+    expect(history[0]!.role).toBe('user'); // Role preserved // Add non-null assertion
   });
 
   it('should handle assistant message updates with thought tags', () => {
@@ -112,8 +113,8 @@ describe('ChatModule History Management', () => {
     
     // Verify cleaned content and extracted reasoning
     const history = chatModule.getChatHistory();
-    expect(history[1].content).toBe('Updated response'); // Thought tag removed
-    expect(history[1].reasoning).toBe('This is a reasoning block'); // Reasoning extracted
+    expect(history[1]!.content).toBe('Updated response'); // Thought tag removed // Add non-null assertion
+    expect(history[1]!.reasoning).toBe('This is a reasoning block'); // Reasoning extracted // Add non-null assertion
   });
 
   it('should delete history message', () => {
@@ -124,8 +125,8 @@ describe('ChatModule History Management', () => {
     // Verify deletion
     const history = chatModule.getChatHistory();
     expect(history).toHaveLength(1);
-    expect(history[0].role).toBe('assistant');
-    expect(history[0].content).toBe('Hi there!');
+    expect(history[0]!.role).toBe('assistant'); // Add non-null assertion
+    expect(history[0]!.content).toBe('Hi there!'); // Add non-null assertion
   });
 
   it('should clear chat history', () => {
@@ -154,8 +155,8 @@ describe('ChatModule History Management', () => {
     // Original messages should be unchanged
     const history = chatModule.getChatHistory();
     expect(history).toHaveLength(2);
-    expect(history[0].role).toBe('user');
-    expect(history[0].content).toBe('Hello');
+    expect(history[0]!.role).toBe('user'); // Add non-null assertion
+    expect(history[0]!.content).toBe('Hello'); // Add non-null assertion
   });
 
   it('should not affect history when historySize is 0', () => {

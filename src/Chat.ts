@@ -1,6 +1,5 @@
 import { RequestUtil, ApiError } from './RequestUtil';
 import type { AnimusChatOptions } from './AnimusClient'; // Import the new type
-
 // --- Interfaces based on API Documentation ---
 
 export interface ChatMessage {
@@ -90,17 +89,17 @@ export class ChatModule {
   // Observer integration functions (passed from AnimusClient)
   private isObserverConnected: () => boolean;
   private sendObserverText: (text: string) => Promise<void>;
-
-
   constructor(
       requestUtil: RequestUtil,
       chatOptions: AnimusChatOptions | undefined, // Receive the whole config object or undefined
       // Add observer functions to constructor
       isObserverConnected: () => boolean,
       sendObserverText: (text: string) => Promise<void>
+      // Removed eventEmitter parameter
   ) {
     this.requestUtil = requestUtil;
     this.config = chatOptions;
+    // Removed eventEmitter storage
 
     // Store observer functions
     this.isObserverConnected = isObserverConnected;
@@ -121,6 +120,7 @@ export class ChatModule {
    * @returns A Promise resolving to the ChatCompletionResponse if stream is false.
    *          If stream is true, returns void and emits streamChunk/streamComplete events.
    */
+  // Restore original overloaded signature
   public async completions(
     request: ChatCompletionRequest
   ): Promise<ChatCompletionResponse>;
@@ -140,8 +140,9 @@ export class ChatModule {
         throw new Error('Chat systemMessage must be configured in AnimusClient chat options to use chat methods.');
     }
 
+    const defaults = this.config || {}; // Define defaults earlier
+
     // Start with defaults from config, then override with request params
-    const defaults = this.config || {};
     const payload: Record<string, any> = {
         // Core required params (request overrides config)
         model: request.model ?? defaults.model,
@@ -165,13 +166,18 @@ export class ChatModule {
         compliance: request.compliance ?? defaults.compliance ?? true,
     };
 
-     // Remove undefined values to avoid sending them in the payload
-     Object.keys(payload).forEach(key => {
-        if (payload[key] === undefined) {
-            delete payload[key];
-        }
-    });
     // --- End Parameter Validation & Merging ---
+
+    // --- Decide Path Based on Stream BEFORE Removing Undefined ---
+    const isStreamingRequest = payload.stream; // Capture the intended stream value
+
+    // --- Remove Undefined Values ---
+    Object.keys(payload).forEach(key => {
+       if (payload[key] === undefined) {
+           delete payload[key];
+       }
+    });
+    // --- End Remove Undefined Values ---
 
 
     // --- System Message & History Management ---
@@ -201,7 +207,7 @@ export class ChatModule {
     // --- End System Message & History Management ---
 
 
-    if (payload.stream) { // Check the final payload value
+    if (isStreamingRequest) { // Check the captured value
       // Store the user messages that were sent *before* processing the stream
       const sentUserMessages = request.messages;
 
@@ -222,23 +228,7 @@ export class ChatModule {
         throw new ApiError('Streaming response body is null', response.status);
       }
 
-      // Need to get access to the AnimusClient instance to use unified events
-      if ('requestUtil' in this.requestUtil && 'client' in this.requestUtil) {
-        const client = (this.requestUtil as any).client;
-        
-        // If AnimusClient is available with processHttpStream, use that
-        if (client && typeof client.processHttpStream === 'function') {
-          // The client will handle events and history updates via the processHttpStream method
-          // If using the client's stream processor, it handles events, so we return an empty async iterable
-          // to satisfy the type signature, but the consumer should rely on events.
-          // This path is less likely to be hit directly in tests unless the client is fully mocked.
-          client.processHttpStream(response);
-          return (async function*() {})(); // Return empty async generator
-        }
-      }
-
-      // --- Fallback: Return AsyncGenerator ---
-      // If AnimusClient or processHttpStream is not available, return an async generator
+      // --- Return AsyncGenerator for HTTP Stream ---
       // eslint-disable-next-line @typescript-eslint/no-this-alias
       const self = this; // Capture 'this' for use inside the generator
 
@@ -255,7 +245,7 @@ export class ChatModule {
             if (done) {
               // End of stream reached without [DONE] message (unlikely but handle)
               if (accumulatedContent) {
-                 self.addAssistantResponseToHistory(accumulatedContent, complianceViolations);
+                 // History update happens *after* the generator finishes or errors
               }
               break; // Exit the loop
             }
@@ -271,6 +261,7 @@ export class ChatModule {
                 const data = line.substring(6).trim();
                 if (data === '[DONE]') {
                   // Stream is officially complete
+                  // History update happens *after* the generator finishes
                   self.addAssistantResponseToHistory(accumulatedContent, complianceViolations);
                   return; // Exit the generator function
                 }
@@ -291,15 +282,17 @@ export class ChatModule {
                   // }
                 } catch (e) {
                   console.error('[Animus SDK] Failed to parse stream chunk:', data, e);
-                  // Decide if you want to throw or just continue
+                  // Re-throw error to be caught by the caller iterating the stream
+                  throw new Error(`Failed to parse stream chunk: ${e instanceof Error ? e.message : String(e)}`);
                 }
               }
             }
           }
         } catch (error) {
           console.error("[Animus SDK] Error processing HTTP stream:", error);
-          // Optionally re-throw or handle the error appropriately
-          throw error; // Re-throwing might be best to signal failure
+          // Add potentially partial content to history on error before re-throwing
+          self.addAssistantResponseToHistory(accumulatedContent, complianceViolations);
+          throw error; // Re-throwing allows caller to handle
         } finally {
           reader.releaseLock();
         }
@@ -347,104 +340,25 @@ export class ChatModule {
    *                  when falling back to the HTTP API. Cannot override `messages` or `stream`.
    * @returns A Promise resolving to `void` if sent via Observer, or `ChatCompletionResponse` if sent via HTTP API.
    */
+  // Return type matches completions now
+  // Allow 'stream' override in options
   public async send(
       messageContent: string,
-      options?: Omit<ChatCompletionRequest, 'messages' | 'stream' | 'model'> & { model?: string } // Allow optional model override for fallback
-  ): Promise<ChatCompletionResponse | void> { // <-- Updated return type
+      options?: Omit<ChatCompletionRequest, 'messages' | 'model'> & { model?: string } // Removed 'stream' from Omit
+  ): Promise<ChatCompletionResponse | AsyncIterable<ChatCompletionChunk>> {
 
       const userMessage: ChatMessage = { role: 'user', content: messageContent };
 
-      // --- Observer Path ---
-      if (this.isObserverConnected()) {
-          // Ensure chat config exists for system message and params
-          if (!this.config || !this.systemMessage) {
-              throw new Error('Chat options (model, systemMessage) must be configured in AnimusClient to use chat.send() with Observer.');
-          }
-
-          const historySize = this.config.historySize ?? 0; // Get history size config
-
-          // 1. Construct Messages Array (System + History + New User Message)
-          let messagesToSend: ChatMessage[] = [this.systemMessage];
-          // Get history BEFORE adding the new user message
-          if (historySize > 0 && this.chatHistory.length > 0) {
-              // Correctly calculate the number of history messages to fetch based on historySize
-              const historyCountToFetch = Math.min(this.chatHistory.length, historySize);
-              if (historyCountToFetch > 0) {
-                  const relevantHistory = this.chatHistory.slice(-historyCountToFetch)
-                      // Map history to exclude the 'reasoning' field before sending
-                      .map(({ role, content, name }) => ({ role, content, ...(name && { name }) }));
-                  // Add the fetched history after the system message
-                  messagesToSend.push(...relevantHistory);
-              }
-          }
-          // ALWAYS add the new user message at the end
-          messagesToSend.push(userMessage);
-          // NOTE: The history array (this.chatHistory) itself is updated AFTER the send succeeds.
-
-
-          // 3. Construct LLM Params Object (from config, filtering undefined)
-          const llmParams: Record<string, any> = {
-              model: this.config.model, // Model is required in config
-              temperature: this.config.temperature,
-              max_completion_tokens: this.config.max_tokens, // Map SDK's max_tokens
-              top_p: this.config.top_p,
-              stop: this.config.stop,
-              // Add other params supported by the agent if they exist in config
-              // presence_penalty: this.config.presence_penalty,
-              // frequency_penalty: this.config.frequency_penalty,
-              // top_k: this.config.top_k,
-              // repetition_penalty: this.config.repetition_penalty,
-          };
-          Object.keys(llmParams).forEach(key => {
-              if (llmParams[key] === undefined) {
-                  delete llmParams[key];
-              }
-          });
-
-          // 3. Construct Final Payload
-          const payload: Record<string, any> = {
-              messages: messagesToSend,
-          };
-          // Only include llm_params if it's not empty
-          if (Object.keys(llmParams).length > 0) {
-              payload.llm_params = llmParams;
-          }
-
-          const payloadString = JSON.stringify(payload);
-
-          try {
-              // Send the complete JSON payload string
-              console.log('[Animus SDK] Sending OBSERVER payload:', payloadString); // Log payload string
-              await this.sendObserverText(payloadString);
-
-              // 4. History Update (Observer Path) - Add user message AFTER successful send
-              this.addMessageToHistory(userMessage); // Add user message to internal history
-
-              // Return void for the observer path
-              return;
-          } catch (error) {
-               console.error("Error sending message via Observer:", error);
-               // No need to remove user message from history here, as it's added *after* successful send
-               throw error; // Re-throw the error
-           }
-      }
-
-      // --- Fallback to HTTP API Path ---
-      console.warn("Observer not connected. Sending message via standard API.");
-
-      // Ensure chat config exists (already checked for observer path, re-check for clarity)
+      // Ensure chat config exists (needed for both paths now)
       if (!this.config || !this.systemMessage) {
-          throw new Error('Chat options (model, systemMessage) must be configured in AnimusClient to use chat.send() fallback.');
+          throw new Error('Chat options (model, systemMessage) must be configured in AnimusClient to use chat.send().');
       }
 
-      // Prepare the request for the completions method, merging options and config
-      const defaults = this.config; // Use validated config
+      // --- Prepare HTTP API Request ---
+      const defaults = this.config;
       const requestOptions = options || {};
-
       const completionRequest: ChatCompletionRequest = {
-          messages: [userMessage], // Only the new user message
-
-          // Merge parameters: options override config defaults
+          messages: [userMessage], // Only the new user message for the API call (history handled by completions)
           model: requestOptions.model ?? defaults.model,
           temperature: requestOptions.temperature ?? defaults.temperature,
           top_p: requestOptions.top_p ?? defaults.top_p,
@@ -458,22 +372,78 @@ export class ChatModule {
           repetition_penalty: requestOptions.repetition_penalty ?? defaults.repetition_penalty,
           min_p: requestOptions.min_p ?? defaults.min_p,
           length_penalty: requestOptions.length_penalty ?? defaults.length_penalty,
-          // Compliance defaults to true if not specified in options or config
           compliance: requestOptions.compliance ?? defaults.compliance ?? true,
-
-          stream: false, // send() explicitly does not support streaming via HTTP fallback
+          // Use stream from options if provided, otherwise use config default
+          stream: options?.stream ?? defaults.stream ?? false,
       };
+      // Remove undefined values
+      Object.keys(completionRequest).forEach(key => {
+          if ((completionRequest as any)[key] === undefined) {
+              delete (completionRequest as any)[key];
+          }
+      });
+      // --- End Prepare HTTP API Request ---
 
-       // Remove undefined values before sending
-       Object.keys(completionRequest).forEach(key => {
-           if ((completionRequest as any)[key] === undefined) {
-               delete (completionRequest as any)[key];
-           }
-       });
 
-      // Call the main completions method for the HTTP request
-      // Type assertion needed because fallback guarantees non-streaming
-      return await this.completions(completionRequest) as ChatCompletionResponse;
+      // --- Prepare Observer Payload (if connected) ---
+      let observerPayloadString: string | null = null;
+      if (this.isObserverConnected()) {
+          const historySize = this.config.historySize ?? 0;
+          let observerMessages: ChatMessage[] = [this.systemMessage];
+          if (historySize > 0 && this.chatHistory.length > 0) {
+              const historyCountToFetch = Math.min(this.chatHistory.length, historySize);
+              if (historyCountToFetch > 0) {
+                  const relevantHistory = this.chatHistory.slice(-historyCountToFetch)
+                      .map(({ role, content, name }) => ({ role, content, ...(name && { name }) }));
+                  observerMessages.push(...relevantHistory);
+              }
+          }
+          observerMessages.push(userMessage); // Add new user message
+
+          const observerLlmParams: Record<string, any> = {
+              model: this.config.model,
+              temperature: this.config.temperature,
+              max_completion_tokens: this.config.max_tokens,
+              top_p: this.config.top_p,
+              stop: this.config.stop,
+              // Add other relevant params from config
+          };
+          Object.keys(observerLlmParams).forEach(key => {
+              if (observerLlmParams[key] === undefined) {
+                  delete observerLlmParams[key];
+              }
+          });
+
+          const observerPayload: Record<string, any> = { messages: observerMessages };
+          if (Object.keys(observerLlmParams).length > 0) {
+              observerPayload.llm_params = observerLlmParams;
+          }
+          observerPayloadString = JSON.stringify(observerPayload);
+      }
+      // --- End Prepare Observer Payload ---
+
+
+      // --- Execute Sends ---
+      // 1. Send to Observer (fire-and-forget, errors logged internally by sendObserverText)
+      if (observerPayloadString) {
+          console.log('[Animus SDK] Sending OBSERVER payload (parallel):', observerPayloadString);
+          this.sendObserverText(observerPayloadString).catch(error => {
+              // Error is already logged in sendObserverText, maybe emit a specific event?
+              console.error("[Animus SDK] Background Observer send failed:", error.message);
+              // Optionally emit an event here if needed: this.eventEmitter.emit('observerSendError', error);
+          });
+          // Add user message to history immediately after *initiating* observer send
+          // This assumes the observer path is the primary one for history if available.
+          // If HTTP is primary, history update should happen in completions() or after its result.
+          // Let's stick to updating history in completions() for consistency.
+          // this.addMessageToHistory(userMessage); // MOVED to completions()
+      } else {
+          // If observer isn't connected, the HTTP path will handle history.
+      }
+
+      // 2. Call main completions method for the HTTP request (handles history update internally)
+      // This is the primary return value (either response or stream)
+      return this.completions(completionRequest);
   }
 
   /**
