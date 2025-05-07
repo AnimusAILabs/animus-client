@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/AnimusAILabs/animus-client/compare/v1.3.0...v1.4.0) (2025-05-07)
+
+
+### Features
+
+* Added observer functionality ([900891f](https://github.com/AnimusAILabs/animus-client/commit/900891f50cf7806afe0597f6dbc3ac36ab2ab79c))
+
 # [1.3.0](https://github.com/AnimusAILabs/animus-client/compare/v1.2.0...v1.3.0) (2025-04-30)
 
 
