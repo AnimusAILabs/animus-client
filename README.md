@@ -213,6 +213,10 @@ const client = new AnimusClient({
     *   `temperature` (optional, `number`): Default temperature for vision *completion* requests.
 *   `observer` (optional, `AnimusObserverOptions`): Configures the LiveKit Observer connection for real-time communication.
     *   `enabled` (**required** if `observer` provided, `boolean`): Set to `true` to enable the observer feature.
+    *   The following parameters configure the observer agent's behavior and are sent to the backend (all values optional):
+      * `initial_inactivity_delay` (optional, `number`, default: 120): Seconds before the first inactivity check.
+      * `backoff_multiplier` (optional, `number`, default: 1.5): Multiplier for increasing the delay between subsequent inactivity checks.
+      * `max_inactivity_messages` (optional, `number`, default: 2): Maximum number of inactivity messages to send during a period of user inactivity.
 
 ---
 
@@ -461,6 +465,8 @@ const client = new AnimusClient({
 });
 ```
 
+After each AI assistant response, the SDK automatically sends the conversation history to the observer agent, which may decide to send proactive messages to re-engage inactive users.
+
 **b) Connection Management**
 
 The SDK manages the LiveKit connection lifecycle internally when `observer.enabled` is `true`. You **must manually initiate** the connection after creating the client:
@@ -476,6 +482,7 @@ Whether a response comes via the Observer or standard HTTP streaming (`client.ch
 *   `streamChunk`: Fired for each piece of data received. Contains `source` ('observer'|'http'), `chunk` (raw data), `deltaContent`, `compliance_violations`.
 *   `streamComplete`: Fired when the stream finishes successfully. Contains `source`, `fullContent`, `usage`, `compliance_violations`.
 *   `streamError`: Fired if an error occurs during the stream. Contains `source`, `error` (message).
+*   `observerSessionEnded`: Fired when the observer agent signals that proactive messaging has stopped. Contains `participantIdentity` and `reason` ('max_messages_reached' | 'session_ended').
 
 ```typescript
 import { StreamChunkData, StreamCompleteData, StreamErrorData } from 'animus-client';
@@ -535,6 +542,38 @@ When the observer is enabled and connected, `client.chat.send(messageContent)`:
 4.  The response arrives via the unified `streamChunk`, `streamComplete`, and `streamError` events.
 
 If the observer is *not* connected, `client.chat.send()` falls back to a standard non-streaming HTTP API request and returns the `ChatCompletionResponse` directly (no stream events are emitted in this fallback case).
+
+**e) Observer Proactive Messaging**
+
+The observer agent analyzes the conversation history after each AI assistant response and may send proactive messages when:
+1. It detects user inactivity
+2. There are unresolved questions in the conversation
+3. The interaction could benefit from additional engagement
+
+These proactive messages are delivered through the unified streaming events with special metadata:
+```typescript
+client.on('streamComplete', (data) => {
+  // Check if this is a proactive message from the observer
+  if (data.source === 'observer' && data.observer_metadata?.is_proactive) {
+    console.log('Observer proactive message:', data.fullContent);
+    // Handle the proactive message in your UI
+  }
+});
+
+client.on('observerSessionEnded', (data: ObserverSessionEndedData) => {
+  console.log(`Observer session ended. Reason: ${data.reason}`);
+  // Update UI to inform the user that proactive messages will no longer be sent.
+});
+```
+
+Proactive messages include helpful metadata in the `observer_metadata` object:
+- `is_proactive`: Boolean flag indicating this is a proactive message
+- `observer_analysis`: The analysis of the conversation that led to this proactive message
+- `observer_message`: The message crafted specifically for this engagement scenario
+
+The `observerSessionEnded` event provides a `reason` for why proactive messaging was stopped:
+- `max_messages_reached`: The configured limit for proactive messages was hit.
+- `session_ended`: The observer agent detected that the conversation naturally concluded.
 
 ---
 

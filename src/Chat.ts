@@ -3,10 +3,11 @@ import type { AnimusChatOptions } from './AnimusClient'; // Import the new type
 // --- Interfaces based on API Documentation ---
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'observer';
   content: string;
   name?: string; // Optional name for user/assistant roles
   reasoning?: string; // Optional field to store extracted <think> content
+  timestamp?: string; // ISO timestamp when message was created
 }
 
 // Keep all optional fields as optional in the request interface
@@ -89,12 +90,15 @@ export class ChatModule {
   // Observer integration functions (passed from AnimusClient)
   private isObserverConnected: () => boolean;
   private sendObserverText: (text: string) => Promise<void>;
+  private resetUserActivity?: () => void;
+  
   constructor(
       requestUtil: RequestUtil,
       chatOptions: AnimusChatOptions | undefined, // Receive the whole config object or undefined
       // Add observer functions to constructor
       isObserverConnected: () => boolean,
-      sendObserverText: (text: string) => Promise<void>
+      sendObserverText: (text: string) => Promise<void>,
+      resetUserActivity?: () => void
       // Removed eventEmitter parameter
   ) {
     this.requestUtil = requestUtil;
@@ -104,6 +108,7 @@ export class ChatModule {
     // Store observer functions
     this.isObserverConnected = isObserverConnected;
     this.sendObserverText = sendObserverText;
+    this.resetUserActivity = resetUserActivity;
 
     // Set system message if config is provided
      if (this.config?.systemMessage) {
@@ -339,6 +344,8 @@ export class ChatModule {
    * @param options - Optional: Overrides for completion parameters (model, temperature, etc.)
    *                  when falling back to the HTTP API. Cannot override `messages` or `stream`.
    * @returns A Promise resolving to `void` if sent via Observer, or `ChatCompletionResponse` if sent via HTTP API.
+   *
+   * Note: When a user message is sent, it also resets the inactivity timer for the observer.
    */
   // Return type matches completions now
   // Allow 'stream' override in options
@@ -346,8 +353,14 @@ export class ChatModule {
       messageContent: string,
       options?: Omit<ChatCompletionRequest, 'messages' | 'model'> & { model?: string } // Removed 'stream' from Omit
   ): Promise<ChatCompletionResponse | AsyncIterable<ChatCompletionChunk>> {
-
-      const userMessage: ChatMessage = { role: 'user', content: messageContent };
+      
+      // Add timestamp to user message
+      const timestamp = new Date().toISOString();
+      const userMessage: ChatMessage = {
+        role: 'user',
+        content: messageContent,
+        timestamp: timestamp
+      };
 
       // Ensure chat config exists (needed for both paths now)
       if (!this.config || !this.systemMessage) {
@@ -385,61 +398,12 @@ export class ChatModule {
       // --- End Prepare HTTP API Request ---
 
 
-      // --- Prepare Observer Payload (if connected) ---
-      let observerPayloadString: string | null = null;
-      if (this.isObserverConnected()) {
-          const historySize = this.config.historySize ?? 0;
-          let observerMessages: ChatMessage[] = [this.systemMessage];
-          if (historySize > 0 && this.chatHistory.length > 0) {
-              const historyCountToFetch = Math.min(this.chatHistory.length, historySize);
-              if (historyCountToFetch > 0) {
-                  const relevantHistory = this.chatHistory.slice(-historyCountToFetch)
-                      .map(({ role, content, name }) => ({ role, content, ...(name && { name }) }));
-                  observerMessages.push(...relevantHistory);
-              }
-          }
-          observerMessages.push(userMessage); // Add new user message
-
-          const observerLlmParams: Record<string, any> = {
-              model: this.config.model,
-              temperature: this.config.temperature,
-              max_completion_tokens: this.config.max_tokens,
-              top_p: this.config.top_p,
-              stop: this.config.stop,
-              // Add other relevant params from config
-          };
-          Object.keys(observerLlmParams).forEach(key => {
-              if (observerLlmParams[key] === undefined) {
-                  delete observerLlmParams[key];
-              }
-          });
-
-          const observerPayload: Record<string, any> = { messages: observerMessages };
-          if (Object.keys(observerLlmParams).length > 0) {
-              observerPayload.llm_params = observerLlmParams;
-          }
-          observerPayloadString = JSON.stringify(observerPayload);
-      }
-      // --- End Prepare Observer Payload ---
-
-
-      // --- Execute Sends ---
-      // 1. Send to Observer (fire-and-forget, errors logged internally by sendObserverText)
-      if (observerPayloadString) {
-          console.log('[Animus SDK] Sending OBSERVER payload (parallel):', observerPayloadString);
-          this.sendObserverText(observerPayloadString).catch(error => {
-              // Error is already logged in sendObserverText, maybe emit a specific event?
-              console.error("[Animus SDK] Background Observer send failed:", error.message);
-              // Optionally emit an event here if needed: this.eventEmitter.emit('observerSendError', error);
-          });
-          // Add user message to history immediately after *initiating* observer send
-          // This assumes the observer path is the primary one for history if available.
-          // If HTTP is primary, history update should happen in completions() or after its result.
-          // Let's stick to updating history in completions() for consistency.
-          // this.addMessageToHistory(userMessage); // MOVED to completions()
-      } else {
-          // If observer isn't connected, the HTTP path will handle history.
-      }
+      // --- NOT sending to Observer right now ---
+      // Per the updated documentation, we now only send to observer
+      // when we get a response from the AI, not when sending a user message
+      
+      // Note: User activity reset is now only done when we receive a response
+      // from the AI, not when sending a message
 
       // 2. Call main completions method for the HTTP request (handles history update internally)
       // This is the primary return value (either response or stream)
@@ -454,6 +418,11 @@ export class ChatModule {
   private addMessageToHistory(message: ChatMessage | null): void {
       // Skip null/undefined messages or in no-history mode
       if (!message || !this.config || !this.config.historySize || this.config.historySize <= 0) return;
+  
+      // Ensure message has a timestamp
+      if (!message.timestamp) {
+          message.timestamp = new Date().toISOString();
+      }
 
       const historySize = this.config.historySize;
 
@@ -507,8 +476,13 @@ export class ChatModule {
     * Public method called by AnimusClient to add a completed assistant response to history.
     * @param assistantContent The full, raw content of the assistant's response.
     * @param compliance_violations Optional array of compliance violations detected in the response.
+    * @param isFromObserver Optional flag indicating if this message came from the observer (default: false)
     */
-   public addAssistantResponseToHistory(assistantContent: string, compliance_violations?: string[] | null): void {
+   public addAssistantResponseToHistory(
+       assistantContent: string,
+       compliance_violations?: string[] | null,
+       isFromObserver: boolean = false
+   ): void {
        // If compliance violations exist, log and do not add to history
        if (compliance_violations && compliance_violations.length > 0) {
            console.warn(`[Animus SDK] Assistant response not added to history due to compliance violations: ${compliance_violations.join(', ')}`);
@@ -518,8 +492,26 @@ export class ChatModule {
        // Don't add empty responses even if no compliance issues
        if (!assistantContent) return;
 
-       const assistantMessage: ChatMessage = { role: 'assistant', content: assistantContent };
+       const timestamp = new Date().toISOString();
+       const assistantMessage: ChatMessage = {
+           role: 'assistant',
+           content: assistantContent,
+           timestamp: timestamp,
+           // Add name property to track source if from observer
+           ...(isFromObserver && { name: 'observer_proactive' })
+       };
        this.addMessageToHistory(assistantMessage);
+       
+       // Reset user activity when assistant message is added
+       if (this.resetUserActivity) {
+           this.resetUserActivity();
+       }
+       
+       // SEND TO OBSERVER: Only when receiving a response from the actual Animus AI,
+       // not when processing messages from the observer itself
+       if (!isFromObserver) {
+           this.sendHistoryToObserver();
+       }
    }
 
    /**
@@ -704,5 +696,65 @@ export class ChatModule {
        const clearedCount = this.chatHistory.length;
        this.chatHistory = [];
        return clearedCount;
+   }
+   
+   /**
+    * Sends the current chat history to the observer.
+    * This should only be called after we've received a response from the AI.
+    * The observer agent will analyze the conversation to decide whether to send a proactive message.
+    */
+   private sendHistoryToObserver(): void {
+       // Only proceed if observer functions are available and connected
+       if (!this.isObserverConnected || !this.sendObserverText) {
+           return;
+       }
+       
+       if (!this.isObserverConnected()) {
+           return;
+       }
+       
+       try {
+           // Prepare the messages for the observer including the system message
+           const historySize = this.config?.historySize ?? 0;
+           let observerMessages: ChatMessage[] = [];
+           
+           // Add system message if available
+           if (this.systemMessage) {
+               observerMessages.push(this.systemMessage);
+           }
+           
+           // Add chat history with timestamps
+           if (historySize > 0 && this.chatHistory.length > 0) {
+               const messagesToSend = this.chatHistory.map(msg => {
+                   // Ensure each message has a timestamp
+                   const msgTimestamp = msg.timestamp || new Date().toISOString();
+                   
+                   // Format message with timestamp if not already formatted
+                   const hasTimestamp = typeof msg.content === 'string' &&
+                                      msg.content.match(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+                   
+                   return {
+                       role: msg.role,
+                       content: hasTimestamp ? msg.content : `[${msgTimestamp}]: ${msg.content}`,
+                       ...(msg.name && { name: msg.name })
+                   };
+               });
+               
+               observerMessages.push(...messagesToSend);
+           }
+           
+           // Only send if we have messages to send
+           if (observerMessages.length > 0) {
+               const observerPayload: Record<string, any> = { messages: observerMessages };
+               
+               // Send to observer
+               console.log('[Animus SDK] Sending history to observer after AI response');
+               this.sendObserverText(JSON.stringify(observerPayload)).catch(error => {
+                   console.error("[Animus SDK] Observer history send failed:", error.message);
+               });
+           }
+       } catch (error) {
+           console.error('[Animus SDK] Error preparing observer payload:', error);
+       }
    }
 }

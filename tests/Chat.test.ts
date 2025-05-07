@@ -13,6 +13,7 @@ let requestUtilMock: RequestUtil;
 let authHandlerMock: AuthHandler; // Define authHandlerMock here
 const mockIsObserverConnected = vi.fn(() => false); // Default to false
 const mockSendObserverText = vi.fn(async () => { /* Default mock */ });
+const mockResetUserActivity = vi.fn(() => { /* Default mock */ });
 
 
 describe('ChatModule', () => {
@@ -30,6 +31,7 @@ describe('ChatModule', () => {
     vi.resetAllMocks();
     mockIsObserverConnected.mockClear();
     mockSendObserverText.mockClear();
+    mockResetUserActivity.mockClear();
     mockIsObserverConnected.mockReturnValue(false); // Ensure default is false
 
     // Default instantiation using mocks
@@ -37,7 +39,8 @@ describe('ChatModule', () => {
         requestUtilMock,
         defaultChatOptions,
         mockIsObserverConnected,
-        mockSendObserverText
+        mockSendObserverText,
+        mockResetUserActivity
     );
   });
 
@@ -131,7 +134,7 @@ describe('ChatModule', () => {
 
     // 1. Check user message added to history BEFORE stream consumption
     expect(addMessageSpy).toHaveBeenCalledTimes(1);
-    expect(addMessageSpy).toHaveBeenCalledWith({ role: 'user', content: 'Say hello' });
+    expect(addMessageSpy).toHaveBeenCalledWith({ role: 'user', content: 'Say hello', timestamp: expect.any(String) });
 
     // 2. Check if requestUtil was called correctly
     expect(requestMock).toHaveBeenCalledTimes(1);
@@ -141,7 +144,7 @@ describe('ChatModule', () => {
       expect.objectContaining({
         messages: expect.arrayContaining([
           { role: 'system', content: 'Test system message' },
-          { role: 'user', content: 'Say hello' }
+          { role: 'user', content: 'Say hello', timestamp: expect.any(String) } // User message from .completions() call, timestamp added by addMessageToHistory
         ]),
         stream: true,
         model: 'test-chat-model'
@@ -178,8 +181,8 @@ describe('ChatModule', () => {
     // Access history AFTER spies have been checked
     const finalHistory = (chatModule as any).chatHistory;
     expect(finalHistory).toEqual([
-        { role: 'user', content: 'Say hello' },
-        { role: 'assistant', content: 'Hello world!' } // Assuming addMessageToHistory cleaned it if needed
+        { role: 'user', content: 'Say hello', timestamp: expect.any(String) },
+        { role: 'assistant', content: 'Hello world!', timestamp: expect.any(String) }
     ]);
 
     // Restore all spies used in this test
@@ -211,16 +214,19 @@ describe('ChatModule', () => {
     // Call 1
     requestMock.mockResolvedValueOnce(mockResponse1);
     await chatModule.send('User message 1');
-    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', expect.objectContaining({
+    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', {
+      model: 'test-chat-model',
       messages: [
         { role: 'system', content: 'System prompt.' },
-        { role: 'user', content: 'User message 1' }
-      ]
-    }), false);
+        { role: 'user', content: 'User message 1', timestamp: expect.any(String) } // User message from send() has a timestamp
+      ],
+      stream: false,
+      compliance: true
+    }, false);
     // History should be: [User1, Assistant1]
     expect((chatModule as any).chatHistory).toEqual([
-        { role: 'user', content: 'User message 1' },
-        { role: 'assistant', content: 'Response 1' }
+        { role: 'user', content: 'User message 1', timestamp: expect.any(String) },
+        { role: 'assistant', content: 'Response 1', timestamp: expect.any(String) }
     ]);
 
     // Call 2
@@ -228,21 +234,24 @@ describe('ChatModule', () => {
     await chatModule.send('User message 2');
     // Expected Payload: System + History BEFORE User2 (User1, Assistant1) + User2
     // History before call: [User1, Assistant1]. historySize=2. Max past history = 2-1=1. Actual past = min(2,1)=1. History to add = [Assistant1].
-    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', expect.objectContaining({
+    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', {
+      model: 'test-chat-model',
       messages: [
         { role: 'system', content: 'System prompt.' },
-        { role: 'assistant', content: 'Response 1' }, // Only Assistant1 fits
-        { role: 'user', content: 'User message 2' }
-      ]
-    }), false);
+        { role: 'assistant', content: 'Response 1' }, // Correct: Historical assistant messages DON'T have timestamps in the sent payload
+        { role: 'user', content: 'User message 2', timestamp: expect.any(String) } // User message from send() has a timestamp
+      ],
+      stream: false,
+      compliance: true
+    }, false);
      // Final History State Check: [User2, Assistant2] (This part remains correct)
      // Let's re-check Chat.ts logic... Ah, it adds User THEN Assistant, then trims.
      // After User2 added: [User1, Assistant1, User2]
      // After Assistant2 added: [User1, Assistant1, User2, Assistant2]
      // After trim(2): [User2, Assistant2]
     expect((chatModule as any).chatHistory).toEqual([
-        { role: 'user', content: 'User message 2' },
-        { role: 'assistant', content: 'Response 2' }
+        { role: 'user', content: 'User message 2', timestamp: expect.any(String) },
+        { role: 'assistant', content: 'Response 2', timestamp: expect.any(String) }
     ]);
 
 
@@ -251,17 +260,20 @@ describe('ChatModule', () => {
     await chatModule.send('User message 3');
      // Expected Payload: System + History BEFORE User3 (User2, Assistant2) + User3
      // History before call: [User2, Assistant2]. historySize=2. Max past history = 2-1=1. Actual past = min(2,1)=1. History to add = [Assistant2].
-    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', expect.objectContaining({
+    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', {
+      model: 'test-chat-model',
       messages: [
         { role: 'system', content: 'System prompt.' },
-        { role: 'assistant', content: 'Response 2' }, // Only Assistant2 fits
-        { role: 'user', content: 'User message 3' }
-      ]
-    }), false);
+        { role: 'assistant', content: 'Response 2' }, // Correct: Historical assistant messages DON'T have timestamps
+        { role: 'user', content: 'User message 3', timestamp: expect.any(String) } // User message from send() has a timestamp
+      ],
+      stream: false,
+      compliance: true
+    }, false);
     // Final History State Check: [User3, Assistant3] (This part remains correct)
     expect((chatModule as any).chatHistory).toEqual([
-        { role: 'user', content: 'User message 3' },
-        { role: 'assistant', content: 'Response 3' }
+        { role: 'user', content: 'User message 3', timestamp: expect.any(String) },
+        { role: 'assistant', content: 'Response 3', timestamp: expect.any(String) }
     ]);
 
     requestMock.mockRestore();
@@ -273,7 +285,7 @@ describe('ChatModule', () => {
     requestMock.mockResolvedValue(mockResponse);
 
     const request: ChatCompletionRequest = {
-      messages: [{ role: 'user', content: 'Test' }],
+      messages: [{ role: 'user', content: 'Test' }], // No timestamp here as it's direct to .completions
       n: 3,
       temperature: 0.5,
       max_tokens: 50,
@@ -287,18 +299,19 @@ describe('ChatModule', () => {
     expect(requestMock).toHaveBeenCalledWith(
       'POST',
       '/chat/completions',
-      expect.objectContaining({
-        messages: expect.arrayContaining([
+      { // Not using expect.objectContaining for more precise matching
+        messages: [ 
           { role: 'system', content: 'Test system message' },
-          { role: 'user', content: 'Test' }
-        ]),
+          { role: 'user', content: 'Test' } // User message in .completions doesn't get auto-timestamped by ChatModule before this point
+        ],
         model: 'test-chat-model', // from config
         n: 3,
         temperature: 0.5,
         max_tokens: 50,
-        stop: ['\n']
-        // Corrected: stream: false is NOT included if not in original request
-      }),
+        stop: ['\n'],
+        stream: false, // Default from ChatModule.completions
+        compliance: true // Default from ChatModule.completions
+      },
       false // stream flag passed to requestUtil is correct
     );
 
@@ -325,7 +338,7 @@ describe('ChatModule', () => {
       requestMock.mockResolvedValue(mockResponse);
 
       const request: ChatCompletionRequest = {
-        messages: [{ role: 'user', content: 'Minimal request' }],
+        messages: [{ role: 'user', content: 'Minimal request' }], // No timestamp here
       };
 
       await chatModule.completions(request);
@@ -337,7 +350,7 @@ describe('ChatModule', () => {
           model: 'default-model',
           messages: [
             { role: 'system', content: 'Default system' },
-            { role: 'user', content: 'Minimal request' }
+            { role: 'user', content: 'Minimal request', timestamp: expect.any(String) } // Expect timestamp due to later mutation seen by spy
           ],
           temperature: 0.6,
           max_tokens: 150,
@@ -369,8 +382,12 @@ describe('ChatModule', () => {
         expect(requestMock).toHaveBeenCalledWith(
           'POST',
           '/chat/completions',
-          expect.objectContaining({
+          expect.objectContaining({ // Using objectContaining because timestamp is dynamic
             model: 'default-model-send',
+            messages: [
+                { role: 'system', content: 'Default system send'},
+                { role: 'user', content: 'Minimal send request', timestamp: expect.any(String)}
+            ],
             temperature: 0.4,
             max_tokens: 99,
             compliance: true, // Check default is applied
@@ -398,7 +415,7 @@ describe('ChatModule', () => {
         requestMock.mockResolvedValue(mockResponse);
 
         const request: ChatCompletionRequest = {
-          messages: [{ role: 'user', content: 'Check compliance default' }],
+          messages: [{ role: 'user', content: 'Check compliance default' }], // No timestamp
           // No compliance specified here either
         };
 
@@ -410,6 +427,10 @@ describe('ChatModule', () => {
           'POST',
           '/chat/completions',
           expect.objectContaining({
+            messages: [ // Expect messages without timestamp if direct to .completions
+                { role: 'system', content: 'Test system'},
+                { role: 'user', content: 'Check compliance default'}
+            ],
             compliance: true, // Should default to true
           }),
           false
@@ -437,7 +458,7 @@ describe('ChatModule', () => {
         requestMock.mockResolvedValue(mockResponse);
 
         const request: ChatCompletionRequest = {
-          messages: [{ role: 'user', content: 'Turn off compliance' }],
+          messages: [{ role: 'user', content: 'Turn off compliance' }], // No timestamp
           compliance: false // Explicitly disable compliance for this request
         };
 
@@ -448,6 +469,10 @@ describe('ChatModule', () => {
           'POST',
           '/chat/completions',
           expect.objectContaining({
+            messages: [
+                { role: 'system', content: 'Test system'},
+                { role: 'user', content: 'Turn off compliance'}
+            ],
             compliance: false, // Should be false as requested
           }),
           false
@@ -472,6 +497,10 @@ describe('ChatModule', () => {
           'POST',
           '/chat/completions',
           expect.objectContaining({
+            messages: [
+                { role: 'system', content: 'Test system'},
+                { role: 'user', content: 'Send with compliance off', timestamp: expect.any(String)}
+            ],
             compliance: false, // Should be false as requested in options
             stream: false, // Default stream is false
           }),
@@ -506,7 +535,7 @@ describe('ChatModule', () => {
       requestMock.mockResolvedValue(mockResponse);
 
       const request: ChatCompletionRequest = {
-        messages: [{ role: 'user', content: 'Override request' }],
+        messages: [{ role: 'user', content: 'Override request' }], // No timestamp
         model: 'override-model', // Override
         temperature: 0.9,       // Override
         max_tokens: 50,         // Override
@@ -520,8 +549,12 @@ describe('ChatModule', () => {
       expect(requestMock).toHaveBeenCalledWith(
         'POST',
         '/chat/completions',
-        expect.objectContaining({
+        expect.objectContaining({ // Using objectContaining because some defaults are applied
           model: 'override-model', // Check override
+          messages: [
+            { role: 'system', content: 'Default system'},
+            { role: 'user', content: 'Override request'} // No timestamp
+          ],
           temperature: 0.9,       // Check override
           max_tokens: 50,         // Check override
           compliance: false,      // Check override
@@ -556,7 +589,8 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(history[0]).toEqual({
           role: 'assistant',
           content: expectedCleanedContent,
-          reasoning: expectedReasoning
+          reasoning: expectedReasoning,
+          timestamp: expect.any(String)
       });
     });
 
@@ -574,7 +608,8 @@ it('should clean think tags and store reasoning when adding assistant message to
         expect(history[0]).toEqual({
             role: 'assistant',
             content: '', // Content should be empty
-            reasoning: 'Only reasoning here.'
+            reasoning: 'Only reasoning here.',
+            timestamp: expect.any(String)
         });
     });
 
@@ -592,7 +627,8 @@ it('should clean think tags and store reasoning when adding assistant message to
         expect(history[0]).toEqual({
             role: 'assistant',
             content: 'Just normal content.',
-            reasoning: undefined // No reasoning field expected
+            reasoning: undefined, // No reasoning field expected
+            timestamp: expect.any(String)
         });
     });
 
@@ -634,8 +670,12 @@ it('should clean think tags and store reasoning when adding assistant message to
         expect(requestMock).toHaveBeenCalledWith(
           'POST',
           '/chat/completions',
-          expect.objectContaining({
+          expect.objectContaining({ // Using objectContaining because timestamp is dynamic
             model: 'override-model-send',
+            messages: [
+                { role: 'system', content: 'Default system send'},
+                { role: 'user', content: 'Override send request', timestamp: expect.any(String)}
+            ],
             temperature: 0.1,
             max_tokens: 200,
             compliance: false,
@@ -666,10 +706,10 @@ it('should clean think tags and store reasoning when adding assistant message to
                 );
                 // Pre-populate history with more messages than testHistorySize to test slicing
                 const fullHistory = [
-                    { role: 'user', content: 'User message 1' },
-                    { role: 'assistant', content: 'Assistant message 1' },
-                    { role: 'user', content: 'User message 2' },
-                    { role: 'assistant', content: 'Assistant message 2' } // 4 messages total
+                    { role: 'user', content: 'User message 1', timestamp: 'ts1' },
+                    { role: 'assistant', content: 'Assistant message 1', timestamp: 'ts2' },
+                    { role: 'user', content: 'User message 2', timestamp: 'ts3' },
+                    { role: 'assistant', content: 'Assistant message 2', timestamp: 'ts4' } // 4 messages total
                 ];
                 (chatModule as any).chatHistory = fullHistory;
 
@@ -717,13 +757,15 @@ it('should clean think tags and store reasoning when adding assistant message to
                 expect(requestMock).toHaveBeenCalledWith(
                     'POST',
                     '/chat/completions',
-                    expect.objectContaining({
-                        messages: expect.arrayContaining([ // Check messages sent to HTTP
+                    { // Not using expect.objectContaining for more precise matching
+                        model: defaultChatOptions.model,
+                        messages: [ 
                            { role: 'system', content: defaultChatOptions.systemMessage },
-                           { role: 'user', content: newUserMessage }
-                        ]),
-                        stream: false // Assuming default stream is false
-                    }),
+                           { role: 'user', content: newUserMessage, timestamp: expect.any(String) }
+                        ],
+                        stream: false, 
+                        compliance: true // Default from send -> completions
+                    },
                     false
                 );
 

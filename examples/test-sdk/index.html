@@ -33,14 +33,6 @@
 
         <!-- Column 3: Configuration Panel -->
         <div id="col-3-config" class="flex flex-col gap-3 flex-1 min-w-[250px] bg-white rounded-lg shadow p-4 border border-gray-200 overflow-y-auto"> <!-- Adjusted gap -->
-            <!-- Connection Status/Controls -->
-            <div id="status-text" class="text-center font-semibold text-sm p-2 rounded bg-gray-100 text-gray-600 w-full shrink-0">Initialized</div> <!-- Added shrink-0 -->
-            <div id="connection-buttons" class="flex justify-center gap-2 w-full shrink-0"> <!-- Added shrink-0 -->
-                <button id="connect-button" class="px-3 py-1 text-sm font-medium bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed">Connect</button>
-                <button id="disconnect-button" disabled class="px-3 py-1 text-sm font-medium bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed">Disconnect</button>
-            </div>
-
-            <hr class="w-full border-t border-gray-300 my-2 shrink-0"> <!-- Adjusted margin -->
 
             <!-- Chat Configuration -->
             <div class="config-item">
@@ -190,6 +182,37 @@ Openness: 37 (Moderate)
             </div>
             <!-- Update Config button removed as dynamic updates are not supported by SDK -->
             <!-- <button id="update-config-button" class="mt-4 px-4 py-2 text-sm font-medium bg-amber-400 text-black rounded-md hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 self-center shrink-0">Update Config</button> -->
+            <hr class="w-full border-t border-gray-300 my-2 shrink-0">
+            
+            <!-- Observer Configuration -->
+            <div class="border border-purple-200 rounded-lg p-2 bg-purple-50">
+                <h3 class="text-sm font-bold text-purple-700 mb-2">Observer Settings</h3>
+                
+                <!-- Observer Connection Controls -->
+                <div class="flex gap-2 w-full shrink-0 mb-2">
+                    <button id="observer-connect-button" class="px-3 py-1 text-sm font-medium bg-purple-500 text-white rounded hover:bg-purple-600 disabled:bg-gray-400 disabled:cursor-not-allowed">Connect</button>
+                    <button id="observer-disconnect-button" disabled class="px-3 py-1 text-sm font-medium bg-red-500 text-white rounded hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed">Disconnect</button>
+                </div>
+                
+                <!-- Observer Configuration Parameters -->
+                <div class="grid grid-cols-1 gap-2"> <!-- Changed to single column for simplicity -->
+                    <div class="config-item">
+                        <label for="initialInactivityDelayInput" class="text-xs font-bold text-gray-600">Initial Inactivity Delay (s):</label>
+                        <input type="number" id="initialInactivityDelayInput" value="120" min="1" step="1" title="Seconds before checking if a user is inactive" class="w-full p-1 border border-gray-300 rounded text-xs">
+                    </div>
+                    <div class="config-item">
+                        <label for="backoffMultiplierInput" class="text-xs font-bold text-gray-600">Backoff Multiplier:</label>
+                        <input type="number" id="backoffMultiplierInput" value="1.5" min="1.0" step="0.1" title="Multiplier for increasing delay (e.g., 1.0 to 3.0)" class="w-full p-1 border border-gray-300 rounded text-xs">
+                    </div>
+                    <div class="config-item">
+                        <label for="maxInactivityMessagesInput" class="text-xs font-bold text-gray-600">Max Inactivity Messages:</label>
+                        <input type="number" id="maxInactivityMessagesInput" value="2" min="0" step="1" title="Maximum inactivity messages to send" class="w-full p-1 border border-gray-300 rounded text-xs">
+                    </div>
+                </div>
+                
+                <!-- Update Observer Config Button -->
+                <button id="update-observer-config-button" class="w-full mt-2 px-3 py-1 text-xs font-medium bg-purple-400 text-white rounded hover:bg-purple-500">Update Observer Config</button>
+            </div>
         </div>
     </div>
 

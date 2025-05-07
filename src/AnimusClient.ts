@@ -81,10 +81,21 @@ export interface AnimusVisionOptions {
 
 
 /** Configuration specific to the LiveKit Observer connection */
-export interface AnimusObserverOptions { // This definition is correct
+export interface AnimusObserverOptions {
     /** Required: Set to true to enable the Observer connection. */
     enabled: boolean;
-    // Future options like custom topic, reconnection settings could go here
+    
+    /** Seconds before checking if a user is inactive. Default: 120 */
+    initial_inactivity_delay?: number;
+    
+    /** Multiplier for increasing the delay between subsequent inactivity checks. Default: 1.5 */
+    backoff_multiplier?: number;
+    
+    /** Maximum number of inactivity messages to send during a period of user inactivity. Default: 2 */
+    max_inactivity_messages?: number;
+    
+    /** Any other custom configuration options (for extensibility, though specific params are preferred) */
+    [key: string]: any;
 }
 
 export interface AnimusClientOptions {
@@ -147,12 +158,16 @@ export interface ObserverChunkData {
 /** Data payload for the 'observerComplete' event. */
 export interface ObserverCompleteData {
     participantIdentity: string;
-    /** Final aggregated content of the stream from the Observer. */
+    /** Final content of the message from the Observer. */
     fullContent: string;
-    /** Final usage statistics, if available from the Observer stream. */
+    /** Final usage statistics, if available from the Observer message. */
     usage?: ChatCompletionResponse['usage'] | null;
-    /** Final compliance violations status for the Observer stream. */
+    /** Final compliance violations status for the Observer message. */
     compliance_violations?: string[] | null;
+    /** Observer metadata containing decision information */
+    observer_metadata?: any;
+    /** The original message content before processing */
+    rawContent?: string;
 }
 
 /** Data payload for the 'observerError' event. */
@@ -163,12 +178,19 @@ export interface ObserverErrorData {
 }
 
 
+/** Data payload for the 'observerSessionEnded' event. */
+export interface ObserverSessionEndedData {
+    participantIdentity: string; // Though likely from the agent itself
+    reason: 'max_messages_reached' | 'session_ended';
+}
+
 /** Defines the event map for the AnimusClient emitter. */
 export type AnimusClientEventMap = {
     // Observer Stream Events (NEW)
     observerChunk: (data: ObserverChunkData) => void;
     observerComplete: (data: ObserverCompleteData) => void;
     observerStreamError: (data: ObserverErrorData) => void; // Renamed to avoid conflict
+    observerSessionEnded: (data: ObserverSessionEndedData) => void; // New event
 
     // Observer Connection Status Events
     observerConnecting: () => void;
@@ -208,6 +230,19 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
   private observerTopic: string = 'animus-observer'; // Default topic
   private currentObserverStreamContent: string = ''; // Accumulator for the current stream
   private currentStreamAccumulator: { [participantId: string]: string } = {}; // Accumulator per participant stream
+  
+  // Default observer configuration values
+  // These are kept for backward compatibility but no longer used for scheduling
+  private observerConfig: {
+    initial_inactivity_delay: number;
+    backoff_multiplier: number;
+    max_inactivity_messages: number;
+    [key: string]: any; // Allow other custom keys
+  } = {
+    initial_inactivity_delay: 120, // Default: 120 seconds
+    backoff_multiplier: 1.5,       // Default: 1.5
+    max_inactivity_messages: 2,    // Default: 2 messages
+  };
 
   /**
    * Creates an instance of the AnimusClient.
@@ -255,6 +290,18 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
 
     // --- Initialize Observer State ---
     this.observerEnabled = this.options.observer?.enabled ?? false;
+    
+    // Apply custom observer configuration if provided
+    if (this.options.observer) {
+      // Apply observer configuration from options and send to backend if connected
+      this.updateObserverConfig(this.options.observer);
+      
+      // If we're already connected somehow, make sure config is sent right away
+      if (this.isObserverConnected()) {
+        this.sendObserverConfigUpdate(this.options.observer)
+          .catch(err => console.error('[Animus SDK] Failed to send initial observer config:', err));
+      }
+    }
 
     // Initialize internal modules
     this.authHandler = new AuthHandler(this.options.tokenProviderUrl, this.options.tokenStorage);
@@ -267,7 +314,9 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
         this.options.chat,
         // Pass observer check and send functions
         this.isObserverConnected.bind(this),
-        this.sendObserverText.bind(this)
+        this.sendObserverText.bind(this),
+        // We still pass resetUserActivity for compatibility but it's simplified
+        this.resetUserActivity.bind(this) 
     );
     this.media = new MediaModule(
         this.requestUtil,
@@ -432,152 +481,95 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
       this.livekitRoom.registerTextStreamHandler(this.observerTopic, (reader: TextStreamReader, participantInfo) => {
           const participantId = participantInfo?.identity ?? 'unknown';
           const topic = reader.info.topic ?? this.observerTopic;
-          // console.log(`Observer: Received OpenAI-style text stream from ${participantId} on topic ${topic}`);
-
-          // Initialize accumulator for this specific participant stream using the class member
-          //this.currentStreamAccumulator[participantId] = '';
-
-          // Process stream chunk by chunk
+          console.log(`[Animus SDK] Observer receiving message from ${participantId} on topic ${topic}`);
           (async () => {
-              let streamComplianceViolations: string[] | undefined = undefined; // Store compliance violations for this stream
-              let finalUsage: ChatCompletionResponse['usage'] | undefined = undefined; // Store final usage
-
               try {
-                  // Initialize accumulator for this specific participant stream
-                  if (!this.currentStreamAccumulator[participantId]) {
-                      this.currentStreamAccumulator[participantId] = '';
-                  }
+                  // Read the whole message (should be a single message)
+                  let firstMessage = '';
+                  for await (const rawMessage of reader) {
+                      // Since the observer sends one complete message, we just take the first one
+                      if (!firstMessage) {
+                          firstMessage = rawMessage.trim();
+                          console.log(`[Animus SDK] Observer received message: ${firstMessage.substring(0, 200)}${firstMessage.length > 200 ? '...' : ''}`);
+                          
+                          // Process the complete message immediately
+                          if (firstMessage) {
+                              try {
+                                  // Parse the message as a JSON object
+                                  const parsedMessage = JSON.parse(firstMessage) as any; // Use 'any' for flexibility
+                                  console.log('[Animus SDK] Observer parsed message:', JSON.stringify(parsedMessage, null, 2));
 
-                  for await (const rawChunk of reader) {
-                      const chunk = rawChunk.trim();
+                                  // Check for proactive_stopped status first (which we'll emit as observerSessionEnded)
+                                  if (parsedMessage.status === 'proactive_stopped' && parsedMessage.reason) {
+                                      console.log(`[Animus SDK] Observer session ended. Reason: ${parsedMessage.reason}`);
+                                      this.emit('observerSessionEnded', {
+                                          participantIdentity: participantId, // Or a generic ID for the agent
+                                          reason: parsedMessage.reason as 'max_messages_reached' | 'session_ended'
+                                      });
+                                  } else if (parsedMessage.choices || parsedMessage.observer_metadata) {
+                                      // Handle regular proactive messages or messages with observer_metadata
+                                      const observerMetadata = parsedMessage.observer_metadata;
+                                      let displayContent = '';
 
-                      if (chunk === '[DONE]') {
-                          // Get final content from the class member accumulator
-                          const finalContent = this.currentStreamAccumulator[participantId] ?? '';
-                          // Use the new ObserverCompleteData interface
-                          const completeData: ObserverCompleteData = {
-                              participantIdentity: participantId, // Add participant ID
-                              fullContent: finalContent,
-                              usage: finalUsage, // Include final usage
-                              compliance_violations: streamComplianceViolations // Include final compliance status
-                          };
-                          this.emit('observerComplete', completeData); // Emit observer-specific event
+                                      if (observerMetadata?.observer_message) {
+                                          displayContent = observerMetadata.observer_message;
+                                          console.log(`[Animus SDK] Using observer_message: "${displayContent}"`);
+                                      } else if (parsedMessage.choices &&
+                                              parsedMessage.choices.length > 0 &&
+                                              parsedMessage.choices[0]?.message?.content) {
+                                          const messageContent = parsedMessage.choices[0].message.content;
+                                          if (messageContent.includes(']: assistant:')) {
+                                              const match = messageContent.match(/\[[^\]]+\]:\s*assistant:\s*(.+)/);
+                                              displayContent = match && match[1] ? match[1].trim() : messageContent;
+                                          } else {
+                                              displayContent = messageContent;
+                                          }
+                                      }
 
-                          // --- Add Assistant Response to History ---
-                          // Add to history ONLY if there were no compliance violations
-                          if (!streamComplianceViolations || streamComplianceViolations.length === 0) {
-                              console.log(`[Animus SDK DEBUG] Observer stream complete (No Compliance Issues). Adding content length: ${finalContent.length} to history.`);
-                              // Pass compliance status (which is null/empty) to history function
-                              this.chat.addAssistantResponseToHistory(finalContent, streamComplianceViolations);
-                          } else {
-                              console.warn(`[Animus SDK DEBUG] Observer stream complete WITH Compliance Issues. Content NOT added to history. Violations: ${streamComplianceViolations.join(', ')}`);
-                              // Even though not added, call history function with violations for consistency (it will handle the return)
-                              this.chat.addAssistantResponseToHistory(finalContent, streamComplianceViolations);
-                          }
-                          // -----------------------------------------
+                                      const completeData: ObserverCompleteData = {
+                                          participantIdentity: participantId,
+                                          fullContent: displayContent,
+                                          usage: parsedMessage.usage,
+                                          compliance_violations: parsedMessage.compliance_violations,
+                                          observer_metadata: observerMetadata || { is_proactive: true },
+                                          rawContent: parsedMessage.choices?.[0]?.message?.content
+                                      };
 
-                          // Clean up AFTER successful processing of [DONE]
-                          delete this.currentStreamAccumulator[participantId];
-                          console.log(`[Animus SDK DEBUG] Cleaned up accumulator for participant ${participantId} after [DONE]`);
+                                      if (displayContent && displayContent.trim().length > 0) {
+                                          console.log(`[Animus SDK] Emitting observer message: "${displayContent}"`);
+                                          this.emit('observerComplete', completeData);
+                                          // Add to history if appropriate, marking it as from observer
+                                          if (!parsedMessage.compliance_violations || parsedMessage.compliance_violations.length === 0) {
+                                              console.log(`[Animus SDK] Adding observer message to history: "${displayContent}"`);
+                                              this.chat.addAssistantResponseToHistory(displayContent, parsedMessage.compliance_violations, true);
+                                          }
+                                      } else {
+                                          console.log(`[Animus SDK] Observer message has no displayable content - not emitting observerComplete event.`);
+                                      }
+                                  } else {
+                                      console.warn('[Animus SDK] Received observer message with unknown structure:', parsedMessage);
+                                  }
 
-                          break; // Exit loop on [DONE]
-                      }
-
-                      if (chunk) {
-                          let jsonData = chunk;
-                          if (chunk.startsWith('data: ')) {
-                              jsonData = chunk.substring(5).trim();
-                          }
-                          if (!jsonData) continue;
-
-                          try {
-                              // Parse the chunk - it might contain content, metadata, or both
-                              const parsedChunk = JSON.parse(jsonData) as ChatCompletionChunk; // Parse as the base type first
-
-                              let deltaContent: string | undefined = undefined;
-                              let currentChunkComplianceViolations: string[] | null | undefined = parsedChunk.compliance_violations;
-                              let currentChunkUsage: ChatCompletionResponse['usage'] | null | undefined = parsedChunk.usage;
-                              // Placeholder for potential future error field in chunk, assuming structure { error: string }
-                              let errorMessage: string | undefined = (parsedChunk as any).error;
-
-
-                              // 1. Check for content delta
-                              if (parsedChunk.choices &&
-                                  parsedChunk.choices.length > 0 &&
-                                  parsedChunk.choices[0]?.delta &&
-                                  parsedChunk.choices[0].delta.content !== undefined) {
-                                  deltaContent = parsedChunk.choices[0].delta.content;
-                              }
-
-                              // 2. Update overall stream compliance status if found in this chunk
-                              // (Since it's consistent, we only need to store it once)
-                              if (currentChunkComplianceViolations && !streamComplianceViolations) {
-                                  streamComplianceViolations = currentChunkComplianceViolations;
-                                  console.log(`[Animus SDK DEBUG] Observer stream - Compliance violations status set:`, streamComplianceViolations);
-                              }
-
-                              // 3. Update final usage if present in this chunk
-                              if (currentChunkUsage) {
-                                  finalUsage = currentChunkUsage;
-                              }
-
-                              // 4. Handle errors if present in the chunk
-                              if (errorMessage) {
-                                  console.warn(`Observer: Received error in stream chunk from ${participantId}: ${errorMessage}`);
-                                  // Emit observerStreamError
+                              } catch (parseError) {
+                                  console.error(`[Animus SDK] Failed to parse observer message: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
                                   this.emit('observerStreamError', {
                                       participantIdentity: participantId,
-                                      error: `Received error in stream chunk: ${errorMessage}`
+                                      error: `Failed to parse observer message: ${parseError}`
                                   });
-                                  // Depending on desired behavior, you might 'continue' or 'break' here
-                                  continue; // Continue processing other chunks for now
                               }
-
-
-                              // --- Emit streamChunk ---
-                              // Emit even if deltaContent is null, as chunk might contain metadata
-                              const chunkData: ObserverChunkData = {
-                                  participantIdentity: participantId, // Add participant ID
-                                  chunk: parsedChunk,
-                                  deltaContent: deltaContent,
-                                  // Pass the consistent compliance status with every chunk
-                                  compliance_violations: streamComplianceViolations
-                              };
-                              this.emit('observerChunk', chunkData); // Emit observer-specific event
-                              // --------------------------
-
-                              // Accumulate content AFTER emitting the chunk
-                              if (deltaContent) {
-                                  // Ensure accumulator exists before adding
-                                  if (this.currentStreamAccumulator[participantId] === undefined) {
-                                      this.currentStreamAccumulator[participantId] = '';
-                                  }
-                                  this.currentStreamAccumulator[participantId] += deltaContent;
-                              }
-
-
-                          } catch (parseError) {
-                              console.warn(`Observer: Failed to parse chunk from ${participantId} as JSON: "${chunk}"`, parseError);
-                              // Emit observerStreamError
-                              this.emit('observerStreamError', {
-                                  participantIdentity: participantId,
-                                  error: `Failed to parse stream chunk: ${chunk}`
-                              });
                           }
+                      } else {
+                          console.log(`[Animus SDK] Unexpected additional message from observer - ignoring`);
                       }
                   }
-              } catch (streamError) {
-                  console.error(`Observer: Error reading stream from ${participantId}:`, streamError);
-                   // Emit observerStreamError
+
+              } catch (error) {
+                  console.error(`[Animus SDK] Error processing observer message: ${error}`);
                   this.emit('observerStreamError', {
                       participantIdentity: participantId,
-                      error: streamError instanceof Error ? streamError.message : String(streamError)
+                      error: error instanceof Error ? error.message : String(error)
                   });
-                  // Clean up accumulator on stream read error
-                  delete this.currentStreamAccumulator[participantId];
-                  console.log(`[Animus SDK DEBUG] Cleaned up accumulator for participant ${participantId} after stream error`);
               }
-              // REMOVED finally block to prevent premature cleanup
           })();
       });
       console.log(`Text stream handler registered for topic: ${this.observerTopic}`);
@@ -636,8 +628,177 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
       }
       await this.disconnectObserver();
   }
+  
+  /**
+   * Forces the current observer configuration to be sent to the backend.
+   * This can be useful after changing settings to ensure the backend is updated immediately.
+   * @returns Promise that resolves when config is sent, or rejects if there's an error
+   */
+  public async syncObserverConfig(): Promise<void> {
+    if (!this.observerEnabled) {
+      throw new Error("Observer is not enabled in configuration.");
+    }
+    
+    if (!this.isObserverConnected()) {
+      throw new Error("Observer is not connected. Connect first using connectObserverManually().");
+    }
+    
+    console.log('[Animus SDK] Manually syncing observer configuration with backend');
+    return this.sendObserverConfigUpdate({});
+  }
 
 
+  /**
+   * This method is simplified to just notify the Chat module that there was user activity
+   * We no longer schedule checks based on inactivity - instead we only send to observer
+   * after receiving an assistant response.
+   */
+  public resetUserActivity(): void {
+    // This method is kept for backward compatibility
+    // The actual sending to observer happens in Chat.ts when an assistant response is received
+    console.log('[Animus SDK] User activity registered (no scheduling needed)');
+  }
+  
+  /**
+   * Sends the current message history to the observer for analysis.
+   * This formats the messages according to the observer API requirements.
+   */
+  private async sendMessageHistoryToObserver(): Promise<void> {
+    if (!this.observerEnabled || !this.isObserverConnected()) {
+      console.log('[Animus SDK] Cannot send message history: Observer not connected');
+      return;
+    }
+    
+    if (!this.chat) {
+      console.warn('[Animus SDK] Chat module not available, cannot send history to observer.');
+      return;
+    }
+    
+    // Get chat history from the chat module
+    const chatHistory = this.chat.getChatHistory();
+    const systemMessage = this.options.chat?.systemMessage;
+    
+    if (!chatHistory || chatHistory.length === 0) {
+      console.log('[Animus SDK] No chat history to send to observer.');
+      return;
+    }
+    
+    try {
+      // Format messages for the observer including timestamps
+      const messagesWithTimestamps = chatHistory.map(msg => {
+        // Check if message already has a timestamp format
+        const hasTimestamp = typeof msg.content === 'string' && msg.content.match(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        
+        return {
+          role: msg.role,
+          // Add timestamp if not present, or keep as is if already formatted
+          content: hasTimestamp ? msg.content : `[${msg.timestamp || new Date().toISOString()}]: ${msg.content}`,
+          ...(msg.name && { name: msg.name })
+        };
+      });
+      
+      // Prepare the payload for the observer
+      const observerPayload = {
+        messages: systemMessage ?
+          [{ role: 'system', content: systemMessage }, ...messagesWithTimestamps] :
+          messagesWithTimestamps
+      };
+      
+      // Send to observer
+      await this.sendObserverText(JSON.stringify(observerPayload));
+      
+      console.log(`[Animus SDK] Sent message history to observer with ${messagesWithTimestamps.length} messages`);
+    } catch (error) {
+      console.error('[Animus SDK] Error sending message history to observer:', error);
+      throw error; // Rethrow to allow handling in calling functions
+    }
+  }
+  
+  /**
+   * Updates observer configuration parameters and sends them to the backend agent
+   * @param config Configuration parameters to update
+   */
+  public updateObserverConfig(config: Partial<AnimusObserverOptions>): void {
+    // Track if any changes were actually made
+    let configChanged = false;
+    
+    // Only update configuration fields that are present
+    // Iterate over known, new config keys to update them
+    const knownConfigKeys: (keyof Omit<AnimusObserverOptions, 'enabled'>)[] = [
+        'initial_inactivity_delay',
+        'backoff_multiplier',
+        'max_inactivity_messages'
+    ];
+
+    knownConfigKeys.forEach(key => {
+        if (config[key] !== undefined && this.observerConfig[key] !== config[key]) {
+            const oldValue = this.observerConfig[key];
+            this.observerConfig[key] = config[key] as any; // Type assertion
+            configChanged = true;
+            console.log(`[Animus SDK] Observer config changed: ${key} = ${config[key]} (was ${oldValue})`);
+        }
+    });
+
+    // Handle any other custom keys if necessary, though direct use of defined keys is preferred
+    Object.keys(config).forEach(key => {
+        if (!knownConfigKeys.includes(key as any) && key !== 'enabled' && config[key] !== undefined) {
+            const oldValue = (this.observerConfig as any)[key];
+            const newValue = config[key];
+            if (oldValue !== newValue) {
+                (this.observerConfig as any)[key] = newValue;
+                configChanged = true;
+                console.log(`[Animus SDK] Observer custom config changed: ${key} = ${newValue} (was ${oldValue})`);
+            }
+        }
+    });
+    
+    if (!configChanged) {
+      console.log('[Animus SDK] No observer configuration changes detected.');
+      return;
+    }
+    
+    console.log('[Animus SDK] Observer configuration updated:', this.observerConfig);
+    
+    // If observer is connected, immediately send the FULL config
+    if (this.observerEnabled && this.isObserverConnected()) {
+      console.log('[Animus SDK] Sending updated observer configuration to backend');
+      this.sendObserverConfigUpdate(config)
+        .then(() => console.log('[Animus SDK] Observer configuration successfully sent to backend'))
+        .catch(error => {
+          console.error('[Animus SDK] Failed to send observer config update:', error);
+        });
+    }
+  }
+  
+  /**
+   * Sends configuration updates to the observer
+   * Always sends the full current configuration to ensure observer has the latest values
+   */
+  private async sendObserverConfigUpdate(config: Partial<AnimusObserverOptions>): Promise<void> {
+    // Create a payload with the FULL current configuration, not just the changed parts
+    const payload = {
+      observer_config: {
+        // Send only the new, supported configuration parameters
+        initial_inactivity_delay: this.observerConfig.initial_inactivity_delay,
+        backoff_multiplier: this.observerConfig.backoff_multiplier,
+        max_inactivity_messages: this.observerConfig.max_inactivity_messages
+        // Any other custom keys present in this.observerConfig will also be sent if the backend supports them
+        // However, explicitly list the known ones for clarity and adherence to the new spec.
+      }
+    };
+    // Add any other custom keys that might have been set on observerConfig
+    Object.keys(this.observerConfig).forEach(key => {
+        if (!['initial_inactivity_delay', 'backoff_multiplier', 'max_inactivity_messages'].includes(key)) {
+            if ((payload.observer_config as any)[key] === undefined) { // Avoid overwriting already set known keys
+                 (payload.observer_config as any)[key] = (this.observerConfig as any)[key];
+            }
+        }
+    });
+    
+    console.log('[Animus SDK] Sending full observer configuration to backend:', payload);
+    await this.sendObserverText(JSON.stringify(payload));
+  }
+  
   // --- Internal method for ChatModule to send text ---
   /** @internal */
   private async sendObserverText(text: string): Promise<void> {

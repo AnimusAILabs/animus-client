@@ -12,10 +12,20 @@ const temperatureInput = document.getElementById('temperature-input');
 const streamInput = document.getElementById('stream-input');
 const complianceInput = document.getElementById('compliance-input');
 
+// Observer UI Elements
+const observerConnectButton = document.getElementById('observer-connect-button');
+const observerDisconnectButton = document.getElementById('observer-disconnect-button');
+const updateObserverConfigButton = document.getElementById('update-observer-config-button');
+// Ensure these are the new IDs from the updated HTML
+const initialInactivityDelayInput = document.getElementById('initialInactivityDelayInput');
+const backoffMultiplierInput = document.getElementById('backoffMultiplierInput');
+const maxInactivityMessagesInput = document.getElementById('maxInactivityMessagesInput');
+
 // Global client instance and its current config
 let client = null;
 let currentChatConfig = {}; // Store the active chat config
 let currentComplianceConfig = {}; // Store the active compliance config (example)
+let currentObserverConfig = {}; // Store the active observer config
 
 // Simple log to console
 function logOutput(message, isError = false) {
@@ -39,6 +49,10 @@ function updateConnectionButtons(state) {
 
     connectButton.disabled = isConnected || isConnecting;
     disconnectButton.disabled = isDisconnected || isConnecting;
+    
+    // Also update the observer-specific buttons
+    observerConnectButton.disabled = isConnected || isConnecting;
+    observerDisconnectButton.disabled = isDisconnected || isConnecting;
 }
 
 // Updated to use Tailwind classes
@@ -106,7 +120,10 @@ async function initializeAndTest() {
             tokenProviderUrl: tokenProviderUrl,
             chat: initialChatOptions,
             observer: {
-                enabled: true // Keep observer enabled by default for this example
+                enabled: true, // Keep observer enabled by default for this example
+                initial_inactivity_delay: parseInt(initialInactivityDelayInput.value, 10) || 120,
+                backoff_multiplier: parseFloat(backoffMultiplierInput.value) || 1.5,
+                max_inactivity_messages: parseInt(maxInactivityMessagesInput.value, 10) || 2
             },
             compliance: initialComplianceOptions
         });
@@ -115,6 +132,12 @@ async function initializeAndTest() {
         // --- Store the successfully used initial config ---
         currentChatConfig = { ...initialChatOptions };
         currentComplianceConfig = { ...initialComplianceOptions };
+        currentObserverConfig = {
+            enabled: true,
+            initial_inactivity_delay: parseInt(initialInactivityDelayInput.value, 10) || 120,
+            backoff_multiplier: parseFloat(backoffMultiplierInput.value) || 1.5,
+            max_inactivity_messages: parseInt(maxInactivityMessagesInput.value, 10) || 2
+        };
 
 
         // --- Observer Connection Status Event Listeners (Keep these) ---
@@ -157,62 +180,64 @@ async function initializeAndTest() {
         // --- Observer Stream Event Listeners (NEW - Handle proactive observer responses) ---
         let observerAssistantMessageElement = null; // Track the OBSERVER's message bubble
 
+        // Note: Despite the event names referencing "chunks", the observer sends complete messages
+        
         client.on('observerChunk', (data) => {
-            logOutput(`Received observerChunk (Participant: ${data.participantIdentity}):`, data.chunk);
-            // Note: We don't remove the main typing indicator here, as the HTTP stream might still be starting.
-            // The observer response is treated as a separate, potentially faster response.
-
-            // Create or find the observer message bubble
-            if (!observerAssistantMessageElement) {
-                // Maybe create a bubble with a specific ID or class?
-                observerAssistantMessageElement = addMessageToChat('assistant', '[Observer]: '); // Start with a prefix
-                observerAssistantMessageElement.classList.add('border', 'border-purple-400'); // Style differently
-                // Don't update main status bar for observer-only chunks yet
-            }
-
-            // Append delta content
-            if (data.deltaContent) {
-                observerAssistantMessageElement.textContent += data.deltaContent;
-            }
-
-            // Scroll to keep the latest content visible
-            chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
-
-            // Handle compliance violations if present
-            if (data.compliance_violations && data.compliance_violations.length > 0) {
-                 console.warn("Observer Compliance violation detected mid-stream:", data.compliance_violations);
-                 if (observerAssistantMessageElement) {
-                     observerAssistantMessageElement.classList.add('border-2', 'border-red-500');
-                 }
-            }
+            // We might get partial data here, but generally shouldn't rely on this event
+            // as the observer now sends complete messages in the observerComplete event
+            logOutput(`Received partial observer data (${data.participantIdentity}):`, data);
+            
+            // We don't create UI elements here since we'll get the complete message in observerComplete
         });
 
         client.on('observerComplete', (data) => {
-            logOutput(`Received observerComplete (Participant: ${data.participantIdentity}):`, data);
-
-            // Finalize observer message bubble state
-            if (observerAssistantMessageElement) {
-                 if (data.compliance_violations && data.compliance_violations.length > 0) {
-                     console.warn("Observer Stream completed with compliance violations:", data.compliance_violations);
-                     observerAssistantMessageElement.classList.add('border-2', 'border-red-500', 'opacity-75');
-                 }
-                 // Add final checks or styling if needed
+            // This event contains the complete message from the observer
+            logOutput(`Received observer message (${data.participantIdentity}):`, data);
+            
+            // Check if we have content to display
+            if (data.fullContent && data.fullContent.trim()) {
+                console.log(`Observer message content (${data.fullContent.length} chars): "${data.fullContent.substring(0, 50)}..."`);
+                
+                // Create message bubble for the observer response
+                observerAssistantMessageElement = addMessageToChat('assistant', `${data.fullContent}`);
+                observerAssistantMessageElement.classList.add('border', 'border-purple-400');
+                
+                // Handle compliance violations if present
+                if (data.compliance_violations && data.compliance_violations.length > 0) {
+                    console.warn("Observer response has compliance violations:", data.compliance_violations);
+                    observerAssistantMessageElement.classList.add('border-2', 'border-red-500', 'opacity-75');
+                }
+            } else {
+                // No content to display - likely a DO_NOTHING response
+                console.log("Observer message with no content - likely a DO_NOTHING decision");
             }
-            observerAssistantMessageElement = null; // Reset observer message element tracker
-            // Don't re-enable input or change main status here, let the HTTP response/stream handler do that.
+            
+            // Reset observer message element tracker
+            observerAssistantMessageElement = null;
         });
 
         client.on('observerStreamError', (data) => {
-            logOutput(`Received observerStreamError (Participant: ${data.participantIdentity}):`, data.error, true);
+            logOutput(`Received observer error (${data.participantIdentity}):`, data.error, true);
 
             // Display error in a new chat bubble, clearly marked
-            const errorBubble = addMessageToChat('assistant', `--- OBSERVER STREAM ERROR (${data.participantIdentity}): ${data.error} ---`);
+            const errorBubble = addMessageToChat('assistant', `--- OBSERVER ERROR (${data.participantIdentity}): ${data.error} ---`);
             errorBubble.classList.add('bg-red-100', 'text-red-700', 'border', 'border-red-400');
 
             observerAssistantMessageElement = null; // Reset observer message element tracker
-            // Don't re-enable input or change main status here.
         });
 
+        client.on('observerSessionEnded', (data) => {
+            logOutput(`Observer session ended (${data.participantIdentity}). Reason: ${data.reason}`);
+            let reasonText = "Proactive messaging stopped.";
+            if (data.reason === 'max_messages_reached') {
+                reasonText = "Proactive messaging stopped: Maximum proactive messages reached.";
+            } else if (data.reason === 'session_ended') {
+                reasonText = "Proactive messaging stopped: Conversation detected as ended by the agent.";
+            }
+            const sessionEndedBubble = addMessageToChat('assistant', `--- ${reasonText} ---`);
+            sessionEndedBubble.classList.add('bg-yellow-100', 'text-yellow-700', 'border', 'border-yellow-400', 'italic');
+            updateStatus(reasonText, false); // Update main status bar as well
+        });
 
         // --- Send Logic (NEW - Handles AsyncIterable for HTTP stream) ---
         let httpAssistantMessageElement = null; // Track the HTTP assistant message bubble
@@ -354,7 +379,7 @@ async function initializeAndTest() {
         });
 
         // --- Manual Connection Button Handlers ---
-        connectButton.onclick = async () => {
+        connectButton.onclick = observerConnectButton.onclick = async () => {
             if (!client.options?.observer?.enabled) {
                  updateStatus("Observer not enabled in SDK config.", true);
                  return;
@@ -371,7 +396,8 @@ async function initializeAndTest() {
                 updateConnectionButtons('disconnected');
             }
         };
-        disconnectButton.onclick = async () => {
+        
+        disconnectButton.onclick = observerDisconnectButton.onclick = async () => {
             logOutput("Manual disconnect initiated...");
             updateStatus("Disconnecting...");
             updateConnectionButtons('disconnecting');
@@ -383,6 +409,50 @@ async function initializeAndTest() {
                 logOutput(errorMsg, true);
                 updateStatus(errorMsg, true);
                 updateConnectionButtons('connected'); // Assume still connected if disconnect fails
+            }
+        };
+        
+        // --- Observer Configuration Update Handler ---
+        updateObserverConfigButton.onclick = async () => {
+            if (!client) {
+                updateStatus("Client not initialized, cannot update observer config", true);
+                return;
+            }
+            
+            console.log("Updating observer configuration from UI values");
+            try {
+                const updatedConfig = {
+                    enabled: true, // Always keep enabled for this example
+                    initial_inactivity_delay: parseInt(initialInactivityDelayInput.value, 10) || 120,
+                    backoff_multiplier: parseFloat(backoffMultiplierInput.value) || 1.5,
+                    max_inactivity_messages: parseInt(maxInactivityMessagesInput.value, 10) || 2
+                };
+                
+                // Update the observer configuration
+                client.updateObserverConfig(updatedConfig);
+                
+                // Update our stored config
+                currentObserverConfig = { ...updatedConfig };
+                
+                logOutput("Observer configuration updated:", updatedConfig);
+                updateStatus("Observer configuration updated", false);
+                
+                // Flash the button to indicate success
+                updateObserverConfigButton.classList.add('bg-green-500');
+                setTimeout(() => {
+                    updateObserverConfigButton.classList.remove('bg-green-500');
+                }, 1000);
+                
+            } catch (error) {
+                const errorMsg = `Failed to update observer config: ${error instanceof Error ? error.message : String(error)}`;
+                logOutput(errorMsg, true);
+                updateStatus(errorMsg, true);
+                
+                // Flash the button red to indicate failure
+                updateObserverConfigButton.classList.add('bg-red-500');
+                setTimeout(() => {
+                    updateObserverConfigButton.classList.remove('bg-red-500');
+                }, 1000);
             }
         };
 
