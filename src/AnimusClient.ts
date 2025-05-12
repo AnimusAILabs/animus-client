@@ -14,8 +14,8 @@ import {
 // ... other imports remain the same
 import { AuthHandler, AuthenticationError, LiveKitContext, LiveKitDetails } from './AuthHandler';
 import { RequestUtil, ApiError } from './RequestUtil';
-import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk } from './Chat'; // Remove AnimusChatOptions import if present
-import { MediaModule, MediaCompletionRequest, MediaCompletionResponse, MediaAnalysisRequest, MediaAnalysisResultResponse, MediaAnalysisStatusResponse } from './Media'; // Remove AnimusVisionOptions import if present
+import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk, Tool } from './Chat'; // Import Tool
+import { MediaModule, MediaCompletionRequest, MediaCompletionResponse, MediaAnalysisRequest, MediaAnalysisResultResponse, MediaAnalysisStatusResponse } from './Media';
 
 // Re-export error types for convenience
 export { AuthenticationError, ApiError };
@@ -68,6 +68,9 @@ export interface AnimusChatOptions {
   // --- SDK Specific ---
   /** Optional: Number of past messages (excluding system message) to maintain internally for context. Defaults to 0 (no history). */
   historySize?: number;
+
+  /** Optional: A list of tools the model may call. Currently, only functions are supported. */
+  tools?: Tool[];
 }
 
 /** Configuration specific to the Media (Vision) module */

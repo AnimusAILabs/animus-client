@@ -180,6 +180,31 @@ Openness: 37 (Moderate)
                     <label for="compliance-input" class="text-sm text-gray-700">Compliance</label> <!-- Added Tailwind classes -->
                 </div>
             </div>
+
+            <!-- Tool Configuration -->
+            <div class="config-item mt-2">
+                <label for="tools-input" class="text-xs font-bold text-gray-600 mb-1">Tools (JSON Array):</label>
+                <textarea id="tools-input" rows="5" class="w-full p-1.5 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 resize-vertical min-h-[80px]" placeholder="e.g., [{"type": "function", "function": {"name": "get_weather", ...}}]">[
+  {
+    "type": "function",
+    "function": {
+      "name": "generate_image",
+      "description": "Generates an image based on a user's query or description. Use this if the user explicitly asks to create or show an image.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "A detailed textual description of the image to be generated. For example, 'a cat wearing a superhero costume' or 'a futuristic cityscape at sunset'."
+          }
+        },
+        "required": ["query"]
+      }
+    }
+  }
+]</textarea>
+            </div>
+
             <!-- Update Config button removed as dynamic updates are not supported by SDK -->
             <!-- <button id="update-config-button" class="mt-4 px-4 py-2 text-sm font-medium bg-amber-400 text-black rounded-md hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 self-center shrink-0">Update Config</button> -->
             <hr class="w-full border-t border-gray-300 my-2 shrink-0">

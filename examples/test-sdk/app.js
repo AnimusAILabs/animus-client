@@ -11,6 +11,7 @@ const maxTokensInput = document.getElementById('max-tokens-input');
 const temperatureInput = document.getElementById('temperature-input');
 const streamInput = document.getElementById('stream-input');
 const complianceInput = document.getElementById('compliance-input');
+const toolsInput = document.getElementById('tools-input');
 
 // Observer UI Elements
 const observerConnectButton = document.getElementById('observer-connect-button');
@@ -38,8 +39,15 @@ function logOutput(message, isError = false) {
 }
 
 function updateStatus(message, isError = false) {
-    statusTextElement.textContent = message;
-    statusTextElement.classList.toggle('error', isError);
+    // Check if the element exists before trying to use it
+    if (statusTextElement) {
+        statusTextElement.textContent = message;
+        statusTextElement.classList.toggle('error', isError);
+    } else {
+        // Just log to console if the element doesn't exist
+        const prefix = isError ? "STATUS ERROR:" : "STATUS:";
+        console.log(`${prefix} ${message}`);
+    }
 }
 
 function updateConnectionButtons(state) {
@@ -47,12 +55,23 @@ function updateConnectionButtons(state) {
     const isConnecting = state === 'connecting' || state === 'reconnecting';
     const isDisconnected = state === 'disconnected';
 
-    connectButton.disabled = isConnected || isConnecting;
-    disconnectButton.disabled = isDisconnected || isConnecting;
+    // Check if elements exist before trying to use them
+    if (connectButton) {
+        connectButton.disabled = isConnected || isConnecting;
+    }
+    
+    if (disconnectButton) {
+        disconnectButton.disabled = isDisconnected || isConnecting;
+    }
     
     // Also update the observer-specific buttons
-    observerConnectButton.disabled = isConnected || isConnecting;
-    observerDisconnectButton.disabled = isDisconnected || isConnecting;
+    if (observerConnectButton) {
+        observerConnectButton.disabled = isConnected || isConnecting;
+    }
+    
+    if (observerDisconnectButton) {
+        observerDisconnectButton.disabled = isDisconnected || isConnecting;
+    }
 }
 
 // Updated to use Tailwind classes
@@ -76,15 +95,21 @@ function addMessageToChat(role, text) {
 
 
 function setInputEnabled(enabled, statusMessage = null) {
-    messageInput.disabled = !enabled;
-    sendButton.disabled = !enabled;
-    if (enabled) {
-        messageInput.placeholder = "Type your message...";
-        if (statusMessage !== 'Sending to AI...' && statusMessage !== 'AI is thinking...') {
-           // Avoid stealing focus right after sending
+    // Check if elements exist before trying to use them
+    if (messageInput) {
+        messageInput.disabled = !enabled;
+        if (enabled) {
+            messageInput.placeholder = "Type your message...";
+            if (statusMessage !== 'Sending to AI...' && statusMessage !== 'AI is thinking...') {
+               // Avoid stealing focus right after sending
+            }
+        } else {
+            messageInput.placeholder = statusMessage || "Waiting...";
         }
-    } else {
-        messageInput.placeholder = statusMessage || "Waiting...";
+    }
+    
+    if (sendButton) {
+        sendButton.disabled = !enabled;
     }
 }
 
@@ -111,8 +136,26 @@ async function initializeAndTest() {
             historySize: parseInt(historySizeInput.value, 10) || 30,
             temperature: parseFloat(temperatureInput.value) || 0.7,
             stream: streamInput.checked, // Read stream preference
-            maxTokens: parseInt(maxTokensInput.value, 10) || 1024
+            maxTokens: parseInt(maxTokensInput.value, 10) || 1024,
+            tools: undefined // Placeholder, will be set below
         };
+
+        // Parse tools
+        try {
+            const toolsJson = toolsInput.value.trim();
+            if (toolsJson) {
+                const parsedTools = JSON.parse(toolsJson);
+                if (Array.isArray(parsedTools)) {
+                    initialChatOptions.tools = parsedTools;
+                    logOutput("Successfully parsed tools from UI.", parsedTools);
+                } else {
+                    logOutput("Tools input is not a valid JSON array. Ignoring.", true);
+                }
+            }
+        } catch (e) {
+            logOutput(`Error parsing tools JSON: ${e.message}. Ignoring tools input.`, true);
+        }
+
         const initialComplianceOptions = { enabled: complianceInput.checked };
 
         // --- Instantiate the client with config read from form ---
@@ -273,35 +316,102 @@ async function initializeAndTest() {
 
             // Determine if streaming is enabled based on the checkbox
             const isStreaming = streamInput.checked;
+            
+            // Prepare message options
+            const messageOptions = { stream: isStreaming };
+            
+            // Parse tools from UI to use for this message
+            try {
+                const toolsJson = toolsInput.value.trim();
+                if (toolsJson) {
+                    const parsedTools = JSON.parse(toolsJson);
+                    if (Array.isArray(parsedTools)) {
+                        messageOptions.tools = parsedTools;
+                        logOutput("Using tools from UI for this message:", parsedTools);
+                        
+                        // Enhanced debugging logs
+                        console.log("Tools being sent:", JSON.stringify(parsedTools, null, 2));
+                        console.log("Full messageOptions:", JSON.stringify(messageOptions, null, 2));
+                    }
+                }
+            } catch (e) {
+                logOutput(`Error parsing tools JSON: ${e.message}. Not using tools for this message.`, true);
+            }
 
             try {
-                // Call send, passing the current stream preference in options
-                const responseOrStream = await client.chat.send(userMessage, { stream: isStreaming });
+                // Add a simple monkey patch to verify what's in the actual API payload
+                if (!window.__originalRequest && client.requestUtil && client.requestUtil.request) {
+                    console.log("Adding requestUtil monitor");
+                    window.__originalRequest = client.requestUtil.request;
+                    client.requestUtil.request = function(...args) {
+                        if (args.length > 2 && args[2]) {
+                            console.log("🔍 FINAL API REQUEST:", JSON.stringify(args[2], null, 2));
+                        }
+                        return window.__originalRequest.apply(this, args);
+                    };
+                }
+                
+                // Call send with updated options including tools
+                logOutput("Sending message with options:", messageOptions);
+                const responseOrStream = await client.chat.send(userMessage, messageOptions);
 
                 if (isStreaming && typeof responseOrStream[Symbol.asyncIterator] === 'function') {
                     // --- Handle HTTP Stream ---
                     logOutput("Receiving HTTP stream...");
                     updateStatus('AI is responding (HTTP Stream)...');
                     httpAssistantMessageElement = null; // Ensure it's null before starting
+                    let accumulatedStreamContent = "";
+                    let accumulatedStreamToolCalls = []; // To accumulate tool calls from stream
+                    let streamFinishReason = null;
 
                     for await (const chunk of responseOrStream) {
                         logOutput("HTTP Chunk:", chunk);
                         removeTypingIndicator(); // Remove indicator on first chunk
 
+                        const choice = chunk.choices?.[0];
+                        if (!choice) continue;
+
                         // Create message bubble if it doesn't exist
                         if (!httpAssistantMessageElement) {
-                            httpAssistantMessageElement = addMessageToChat('assistant', ''); // Base assistant styles
+                            httpAssistantMessageElement = addMessageToChat('assistant', '');
                         }
 
-                        const deltaContent = chunk.choices?.[0]?.delta?.content;
-                        if (deltaContent) {
-                            httpAssistantMessageElement.textContent += deltaContent;
+                        if (choice.delta?.content) {
+                            accumulatedStreamContent += choice.delta.content;
                         }
 
-                        // Scroll to keep the latest content visible
+                        if (choice.delta?.tool_calls) {
+                            choice.delta.tool_calls.forEach(tcPart => {
+                                const { index, ...toolCallDelta } = tcPart;
+                                while (accumulatedStreamToolCalls.length <= index) {
+                                    accumulatedStreamToolCalls.push({ function: { arguments: "" } }); // Simplified placeholder
+                                }
+                                const targetCall = accumulatedStreamToolCalls[index];
+                                if (toolCallDelta.id) targetCall.id = toolCallDelta.id;
+                                if (toolCallDelta.type) targetCall.type = toolCallDelta.type;
+                                if (toolCallDelta.function) {
+                                    if (!targetCall.function) targetCall.function = { name: "", arguments: "" };
+                                    if (toolCallDelta.function.name) targetCall.function.name = toolCallDelta.function.name;
+                                    if (toolCallDelta.function.arguments) targetCall.function.arguments += toolCallDelta.function.arguments;
+                                }
+                            });
+                        }
+                        
+                        if (choice.finish_reason) {
+                            streamFinishReason = choice.finish_reason;
+                        }
+
+                        // Update UI: Prioritize tool calls if they are forming
+                        if (accumulatedStreamToolCalls.length > 0) {
+                            httpAssistantMessageElement.textContent = `Tool call(s) requested:\n${JSON.stringify(accumulatedStreamToolCalls, null, 2)}`;
+                            httpAssistantMessageElement.classList.add('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
+                        } else {
+                            httpAssistantMessageElement.textContent = accumulatedStreamContent;
+                             httpAssistantMessageElement.classList.remove('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
+                        }
+                        
                         chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
 
-                        // Handle compliance violations (unlikely in chunks, but check)
                         if (chunk.compliance_violations && chunk.compliance_violations.length > 0) {
                             console.warn("HTTP Stream: Compliance violation detected mid-stream:", chunk.compliance_violations);
                             if (httpAssistantMessageElement) {
@@ -309,33 +419,50 @@ async function initializeAndTest() {
                             }
                         }
                     }
-                    // Stream finished successfully
                     logOutput("HTTP Stream finished.");
-                    // Finalize bubble state (e.g., check final compliance if needed, though SDK handles history)
-                    if (httpAssistantMessageElement) {
-                        // Add final styling if needed based on accumulated state or final chunk info
+                     if (streamFinishReason === 'tool_calls' && accumulatedStreamToolCalls.length > 0 && !accumulatedStreamContent) {
+                        // Already displayed by the loop
+                    } else if (!httpAssistantMessageElement && !accumulatedStreamContent && accumulatedStreamToolCalls.length === 0) {
+                        // If nothing was ever displayed (e.g. empty stream)
+                         addMessageToChat('assistant', '[Empty Response]');
                     }
-                    httpAssistantMessageElement = null; // Reset tracker
+
+
+                    httpAssistantMessageElement = null;
                     setInputEnabled(true, 'Connected - Ready to Chat');
                     updateStatus('Connected - Ready to Chat');
 
                 } else if (!isStreaming && responseOrStream && typeof responseOrStream === 'object' && 'choices' in responseOrStream) {
-                    // --- Handle Non-Streaming HTTP Response ---
-                    const response = responseOrStream; // No type assertion needed in JS
-                    logOutput("Received Non-Streaming HTTP Response:", false);
-                    removeTypingIndicator(); // Remove indicator
+                    const response = responseOrStream;
+                    logOutput("Received Non-Streaming HTTP Response:", response);
+                    removeTypingIndicator();
 
-                    const responseText = response.choices?.[0]?.message?.content || JSON.stringify(response);
-                    logOutput("HTTP Response Content:", responseText);
+                    const message = response.choices?.[0]?.message;
+                    let displayContent = "";
+                    let messageStyles = [];
 
-                    // Check for compliance violations
+                    if (message?.tool_calls && message.tool_calls.length > 0) {
+                        displayContent = `Tool call(s) requested:\n${JSON.stringify(message.tool_calls, null, 2)}`;
+                        logOutput("Tool calls detected:", message.tool_calls);
+                        messageStyles = ['text-xs', 'bg-yellow-100', 'border', 'border-yellow-300', 'whitespace-pre-wrap'];
+                    } else if (message?.content) {
+                        displayContent = message.content;
+                    } else {
+                        displayContent = "[No content or tool_calls in response]";
+                        logOutput("No textual content or tool_calls in response.", response);
+                    }
+                    
+                    const assistantMsgElement = addMessageToChat('assistant', displayContent);
+                    if (messageStyles.length > 0) {
+                        assistantMsgElement.classList.add(...messageStyles);
+                    }
+
+
                     if (response.compliance_violations && response.compliance_violations.length > 0) {
                          console.warn("HTTP response has compliance violations:", response.compliance_violations);
+                         assistantMsgElement.classList.add('border-2', 'border-red-500', 'opacity-75');
                          const violationBubble = addMessageToChat('assistant', `[Content Moderation: ${response.compliance_violations.join(', ')}]`);
                          violationBubble.classList.add('bg-red-100', 'text-red-700', 'italic');
-                         // SDK prevents adding to history automatically
-                    } else {
-                         addMessageToChat('assistant', responseText); // Add valid response
                     }
 
                     updateStatus('Connected - Ready to Chat');
@@ -379,7 +506,7 @@ async function initializeAndTest() {
         });
 
         // --- Manual Connection Button Handlers ---
-        connectButton.onclick = observerConnectButton.onclick = async () => {
+        const connectHandler = async () => {
             if (!client.options?.observer?.enabled) {
                  updateStatus("Observer not enabled in SDK config.", true);
                  return;
@@ -397,7 +524,11 @@ async function initializeAndTest() {
             }
         };
         
-        disconnectButton.onclick = observerDisconnectButton.onclick = async () => {
+        // Check if elements exist before assigning handlers
+        if (connectButton) connectButton.onclick = connectHandler;
+        if (observerConnectButton) observerConnectButton.onclick = connectHandler;
+        
+        const disconnectHandler = async () => {
             logOutput("Manual disconnect initiated...");
             updateStatus("Disconnecting...");
             updateConnectionButtons('disconnecting');
@@ -412,8 +543,12 @@ async function initializeAndTest() {
             }
         };
         
+        // Check if elements exist before assigning handlers
+        if (disconnectButton) disconnectButton.onclick = disconnectHandler;
+        if (observerDisconnectButton) observerDisconnectButton.onclick = disconnectHandler;
+        
         // --- Observer Configuration Update Handler ---
-        updateObserverConfigButton.onclick = async () => {
+        const updateConfigHandler = async () => {
             if (!client) {
                 updateStatus("Client not initialized, cannot update observer config", true);
                 return;
@@ -438,10 +573,12 @@ async function initializeAndTest() {
                 updateStatus("Observer configuration updated", false);
                 
                 // Flash the button to indicate success
-                updateObserverConfigButton.classList.add('bg-green-500');
-                setTimeout(() => {
-                    updateObserverConfigButton.classList.remove('bg-green-500');
-                }, 1000);
+                if (updateObserverConfigButton) {
+                    updateObserverConfigButton.classList.add('bg-green-500');
+                    setTimeout(() => {
+                        updateObserverConfigButton.classList.remove('bg-green-500');
+                    }, 1000);
+                }
                 
             } catch (error) {
                 const errorMsg = `Failed to update observer config: ${error instanceof Error ? error.message : String(error)}`;
@@ -449,12 +586,17 @@ async function initializeAndTest() {
                 updateStatus(errorMsg, true);
                 
                 // Flash the button red to indicate failure
-                updateObserverConfigButton.classList.add('bg-red-500');
-                setTimeout(() => {
-                    updateObserverConfigButton.classList.remove('bg-red-500');
-                }, 1000);
+                if (updateObserverConfigButton) {
+                    updateObserverConfigButton.classList.add('bg-red-500');
+                    setTimeout(() => {
+                        updateObserverConfigButton.classList.remove('bg-red-500');
+                    }, 1000);
+                }
             }
         };
+        
+        // Check if element exists before assigning handler
+        if (updateObserverConfigButton) updateObserverConfigButton.onclick = updateConfigHandler;
 
         // Note: Connection is now manual
         logOutput('SDK Initialized. Observer connection requires manual initiation.');

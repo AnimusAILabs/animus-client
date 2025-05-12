@@ -2,18 +2,40 @@ import { RequestUtil, ApiError } from './RequestUtil';
 import type { AnimusChatOptions } from './AnimusClient'; // Import the new type
 // --- Interfaces based on API Documentation ---
 
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string; // JSON string of arguments
+  };
+}
+
+export interface Tool {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters: object; // JSON Schema object
+  };
+}
+
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'observer';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'observer' | 'tool';
+  content: string | null; // Can be null if tool_calls are present or for tool responses
   name?: string; // Optional name for user/assistant roles
   reasoning?: string; // Optional field to store extracted <think> content
   timestamp?: string; // ISO timestamp when message was created
+  tool_calls?: ToolCall[]; // For assistant messages requesting a tool call
+  tool_call_id?: string; // For tool messages responding to a tool call
 }
 
 // Keep all optional fields as optional in the request interface
 export interface ChatCompletionRequest {
   messages: ChatMessage[];
   model?: string;
+  tools?: Tool[];
+  tool_choice?: "none" | "auto" | { type: "function"; function: { name: string } };
   temperature?: number;
   top_p?: number;
   n?: number;
@@ -36,9 +58,10 @@ interface ChatCompletionChoice {
   index: number;
   message: {
     role: 'assistant';
-    content: string;
+    content: string | null; // Can be null if tool_calls are present
+    tool_calls?: ToolCall[];
   };
-  finish_reason: string; // e.g., 'stop', 'length'
+  finish_reason: string; // e.g., 'stop', 'length', 'tool_calls'
   compliance_violations?: string[]; // Violations specific to this choice (for n > 1)
 }
 
@@ -58,13 +81,15 @@ export interface ChatCompletionResponse {
 
 interface ChatCompletionChunkChoiceDelta {
   role?: 'assistant';
-  content?: string;
+  content?: string | null; // Can be null
+  // For streaming, tool_calls might be partial and include an index
+  tool_calls?: (Partial<ToolCall> & { index: number; function?: Partial<ToolCall['function']> })[];
 }
 
 interface ChatCompletionChunkChoice {
   index: number;
   delta: ChatCompletionChunkChoiceDelta;
-  finish_reason: string | null;
+  finish_reason: string | null; // Can be 'tool_calls'
 }
 
 export interface ChatCompletionChunk {
@@ -169,7 +194,20 @@ export class ChatModule {
         length_penalty: request.length_penalty ?? defaults.length_penalty,
         // Compliance defaults to true if not specified in request or config
         compliance: request.compliance ?? defaults.compliance ?? true,
+
+        // Tool calling parameters
+        tools: request.tools ?? defaults.tools,
+        // tool_choice is set below based on presence of tools
     };
+
+    // Set tool_choice to "auto" if tools are present, otherwise leave it undefined (or "none" if explicitly set in request)
+    if (payload.tools && payload.tools.length > 0) {
+        // If request specifically said "none", respect it. Otherwise, "auto".
+        payload.tool_choice = request.tool_choice === "none" ? "none" : "auto";
+    } else if (request.tool_choice) { // If no tools, but tool_choice is in request (e.g. "none")
+        payload.tool_choice = request.tool_choice;
+    }
+
 
     // --- End Parameter Validation & Merging ---
 
@@ -199,9 +237,28 @@ export class ChatModule {
        if (availableSlots > 0) {
            const historyCount = Math.min(this.chatHistory.length, availableSlots);
            const relevantHistory = this.chatHistory.slice(-historyCount)
-               // Map history to exclude the 'reasoning' field before sending
-               .map(({ role, content, name }) => ({ role, content, ...(name && { name }) }));
-            messagesToSend.push(...relevantHistory);
+               // Map history to include necessary fields for API payload
+               .map(msg => {
+                   const historyMsgPayload: Partial<ChatMessage> = {
+                       role: msg.role,
+                       content: msg.content,
+                   };
+                   if (msg.name) {
+                       historyMsgPayload.name = msg.name;
+                   }
+                   if (msg.role === 'assistant' && msg.tool_calls) {
+                       historyMsgPayload.tool_calls = msg.tool_calls;
+                   }
+                   // Note: tool_call_id is part of a 'tool' role message,
+                   // and 'tool' role messages are typically not re-sent as history in the same way,
+                   // but if they were, the 'content' would be the tool's output.
+                   // The current structure of ChatMessage includes tool_call_id for role 'tool'.
+                   // If a 'tool' message from history needs to be sent, its 'content' is its primary payload.
+                   // The API expects 'tool_call_id' on new 'tool' messages, not necessarily historical ones.
+                   // For now, we only explicitly add tool_calls for assistant messages from history.
+                   return historyMsgPayload as ChatMessage; // Cast to ChatMessage, assuming content will be string | null
+               });
+           messagesToSend.push(...relevantHistory);
         }
     }
 
@@ -238,7 +295,8 @@ export class ChatModule {
       const self = this; // Capture 'this' for use inside the generator
 
       async function* processStream(): AsyncIterable<ChatCompletionChunk> {
-        let accumulatedContent = '';
+        let accumulatedContent: string | null = ''; // Can be null if only tool_calls
+        let accumulatedToolCalls: ToolCall[] = [];
         let complianceViolations: string[] | undefined;
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -266,8 +324,12 @@ export class ChatModule {
                 const data = line.substring(6).trim();
                 if (data === '[DONE]') {
                   // Stream is officially complete
-                  // History update happens *after* the generator finishes
-                  self.addAssistantResponseToHistory(accumulatedContent, complianceViolations);
+                  self.addAssistantResponseToHistory(
+                    accumulatedContent,
+                    complianceViolations,
+                    false,
+                    accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                  );
                   return; // Exit the generator function
                 }
 
@@ -276,15 +338,67 @@ export class ChatModule {
                   yield chunk; // Yield the parsed chunk
 
                   // Accumulate content and violations for history update
-                  const deltaContent = chunk.choices?.[0]?.delta?.content;
-                  if (deltaContent) {
-                    accumulatedContent += deltaContent;
+                  const choice = chunk.choices?.[0];
+                  if (choice) {
+                    const delta = choice.delta;
+                    if (delta) {
+                        if (delta.content) {
+                            if (accumulatedContent === null) accumulatedContent = ""; // Initialize if it was null
+                            accumulatedContent += delta.content;
+                        }
+                        if (delta.tool_calls) {
+                            // This is a simplified accumulation.
+                            // OpenAI streams tool_calls with an index, e.g., tool_calls[0].id, tool_calls[0].function.name, etc.
+                            // A more robust implementation would reconstruct the ToolCall objects piece by piece.
+                            // For now, we'll assume each chunk's tool_calls array contains complete or new ToolCall objects.
+                            // This might lead to duplicates or partials if not handled carefully by the server's streaming.
+                            // A common approach is to receive tool_calls with an index and merge them.
+                            // Example: { index: 0, id: "call_abc", function: { name: "get_weather", arguments: "" } }
+                            // then later: { index: 0, function: { arguments: "{\"location\":\"SF\"}" } }
+                            delta.tool_calls.forEach(tcDelta => {
+                                const { index, ...toolCallData } = tcDelta;
+
+                                // Ensure accumulatedToolCalls has an entry for this index
+                                while (accumulatedToolCalls.length <= index) {
+                                    accumulatedToolCalls.push({
+                                        // Initialize with placeholder or default values
+                                        id: `temp_id_${accumulatedToolCalls.length}`, // Placeholder, will be overwritten
+                                        type: "function", // Default type
+                                        function: { name: "", arguments: "" }
+                                    });
+                                }
+
+                                const targetCall = accumulatedToolCalls[index]!; // Non-null assertion as we just ensured it exists
+
+                                // Merge properties from toolCallData into targetCall
+                                if (toolCallData.id) {
+                                    targetCall.id = toolCallData.id;
+                                }
+                                if (toolCallData.type) {
+                                    targetCall.type = toolCallData.type;
+                                }
+
+                                if (toolCallData.function) {
+                                    // Ensure targetCall.function exists
+                                    if (!targetCall.function) {
+                                        targetCall.function = { name: "", arguments: "" };
+                                    }
+                                    if (toolCallData.function.name) {
+                                        targetCall.function.name = toolCallData.function.name;
+                                    }
+                                    if (toolCallData.function.arguments) {
+                                        // Append arguments as they stream in
+                                        targetCall.function.arguments += toolCallData.function.arguments;
+                                    }
+                                }
+                            });
+                        }
+                        if (choice.finish_reason === 'tool_calls' && accumulatedContent === '') {
+                            accumulatedContent = null; // Explicitly set to null if finish_reason is tool_calls and no content
+                        }
+                    }
                   }
-                  // Compliance violations are not sent in streaming chunks per updated docs
-                  // if (chunk.compliance_violations) {
-                  //   complianceViolations = chunk.compliance_violations;
-                  //   console.log(`[Animus SDK] Compliance violations detected:`, complianceViolations);
-                  // }
+                  // Compliance violations are not sent in streaming chunks
                 } catch (e) {
                   console.error('[Animus SDK] Failed to parse stream chunk:', data, e);
                   // Re-throw error to be caught by the caller iterating the stream
@@ -295,8 +409,12 @@ export class ChatModule {
           }
         } catch (error) {
           console.error("[Animus SDK] Error processing HTTP stream:", error);
-          // Add potentially partial content to history on error before re-throwing
-          self.addAssistantResponseToHistory(accumulatedContent, complianceViolations);
+          self.addAssistantResponseToHistory(
+            accumulatedContent,
+            complianceViolations,
+            false,
+            accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+          );
           throw error; // Re-throwing allows caller to handle
         } finally {
           reader.releaseLock();
@@ -322,9 +440,17 @@ export class ChatModule {
          request.messages.forEach(msg => this.addMessageToHistory(msg));
          // Add the assistant's response only if no compliance violations
          const assistantMessage = response.choices?.[0]?.message;
-         if (assistantMessage) {
+         const assistantMessageContent = response.choices?.[0]?.message?.content;
+         const assistantToolCalls = response.choices?.[0]?.message?.tool_calls;
+
+         if (assistantMessageContent !== undefined || assistantToolCalls) {
              // Use addAssistantResponseToHistory to handle cleaning/trimming and check compliance
-             this.addAssistantResponseToHistory(assistantMessage.content, response.compliance_violations);
+             this.addAssistantResponseToHistory(
+                 assistantMessageContent ?? null, // Pass null if content is undefined
+                 response.compliance_violations,
+                 false,
+                 assistantToolCalls
+             );
          }
          // Trimming is handled within addMessageToHistory
      }
@@ -388,6 +514,9 @@ export class ChatModule {
           compliance: requestOptions.compliance ?? defaults.compliance ?? true,
           // Use stream from options if provided, otherwise use config default
           stream: options?.stream ?? defaults.stream ?? false,
+          // Pass through tools from options if provided, else from config
+          tools: requestOptions.tools ?? defaults.tools,
+          // tool_choice is set by `completions` method based on presence of tools
       };
       // Remove undefined values
       Object.keys(completionRequest).forEach(key => {
@@ -430,38 +559,53 @@ export class ChatModule {
       const messageToAdd = { ...message };
 
       if (messageToAdd.role === 'assistant') {
-          let finalContent = messageToAdd.content || '';
+          let finalContent = messageToAdd.content || ''; // content can be null
           let reasoning: string | undefined = undefined;
+          const toolCalls = messageToAdd.tool_calls; // Preserve tool_calls
 
-          // Extract reasoning from <think></think> blocks if present
-          const thinkRegex = /<think>([\s\S]*?)<\/think>/; // Matches first <think>...</think> block
-          const match = finalContent.match(thinkRegex); // Match on the original content
+          // Reasoning extraction only applies if there's content
+          if (finalContent) {
+              // Extract reasoning from <think></think> blocks if present
+              const thinkRegex = /<think>([\s\S]*?)<\/think>/; // Matches first <think>...</think> block
+              const match = finalContent.match(thinkRegex); // Match on the original content
 
-          if (match && match[0] && match[1]) {
-              // Found a think block
-              reasoning = match[1].trim(); // Extract content inside tags
-              // Construct the cleaned content by removing the matched block
-              finalContent = finalContent.replace(match[0], '').trim();
-              // Fix any double spaces that might occur when removing the block
-              finalContent = finalContent.replace(/\s{2,}/g, ' ');
-              // console.log("[Animus SDK] Extracted reasoning:", reasoning); // Keep commented out for now
-          } else {
-              // No think block found, just trim whitespace from original content
-              finalContent = finalContent.trim();
+              if (match && match[0] && match[1]) {
+                  // Found a think block
+                  reasoning = match[1].trim(); // Extract content inside tags
+                  // Construct the cleaned content by removing the matched block
+                  finalContent = finalContent.replace(match[0], '').trim();
+                  // Fix any double spaces that might occur when removing the block
+                  finalContent = finalContent.replace(/\s{2,}/g, ' ');
+                  // console.log("[Animus SDK] Extracted reasoning:", reasoning); // Keep commented out for now
+              } else {
+                  // No think block found, just trim whitespace from original content
+                  finalContent = finalContent.trim();
+              }
           }
-
           // Update messageToAdd with cleaned content and reasoning
-          messageToAdd.content = finalContent;
+          messageToAdd.content = finalContent || null; // Ensure it's null if empty after processing
           if (reasoning) {
               messageToAdd.reasoning = reasoning;
           }
-
-          // Only push if there's actual visible content OR if reasoning was extracted
-          if (!finalContent && !reasoning) {
-               console.log("[Animus SDK] Assistant message had no visible content or reasoning after processing, not adding to history.");
-               return; // Don't add empty/whitespace-only assistant messages without reasoning
+          if (toolCalls) { // Ensure tool_calls are carried over
+              messageToAdd.tool_calls = toolCalls;
           }
+
+          // Only push if there's actual visible content OR if reasoning was extracted OR if there are tool_calls
+          if (!finalContent && !reasoning && (!toolCalls || toolCalls.length === 0)) {
+               console.log("[Animus SDK] Assistant message had no visible content, reasoning, or tool_calls after processing, not adding to history.");
+               return; // Don't add empty/whitespace-only assistant messages without reasoning or tool_calls
+          }
+      } else if (messageToAdd.role === 'tool') {
+        // For tool messages, content is required (the result of the tool call)
+        // and tool_call_id is required.
+        if (!messageToAdd.content || !messageToAdd.tool_call_id) {
+            console.warn("[Animus SDK] Tool message is missing content or tool_call_id, not adding to history.", messageToAdd);
+            return;
+        }
+        // No further processing needed for tool messages, just ensure they are added.
       }
+
 
       // Add the processed message (user or cleaned assistant) to history
       this.chatHistory.push(messageToAdd);
@@ -477,11 +621,13 @@ export class ChatModule {
     * @param assistantContent The full, raw content of the assistant's response.
     * @param compliance_violations Optional array of compliance violations detected in the response.
     * @param isFromObserver Optional flag indicating if this message came from the observer (default: false)
+    * @param tool_calls Optional array of tool calls made by the assistant.
     */
    public addAssistantResponseToHistory(
-       assistantContent: string,
+       assistantContent: string | null, // Can be null if only tool_calls are present
        compliance_violations?: string[] | null,
-       isFromObserver: boolean = false
+       isFromObserver: boolean = false,
+       tool_calls?: ToolCall[]
    ): void {
        // If compliance violations exist, log and do not add to history
        if (compliance_violations && compliance_violations.length > 0) {
@@ -489,16 +635,21 @@ export class ChatModule {
            return;
        }
 
-       // Don't add empty responses even if no compliance issues
-       if (!assistantContent) return;
+       // Don't add empty responses if there's no content AND no tool_calls
+       if (assistantContent === null && (!tool_calls || tool_calls.length === 0)) {
+           console.log("[Animus SDK] Assistant response has no content and no tool_calls, not adding to history.");
+           return;
+       }
+
 
        const timestamp = new Date().toISOString();
        const assistantMessage: ChatMessage = {
            role: 'assistant',
-           content: assistantContent,
+           content: assistantContent, // Will be null if no text content
            timestamp: timestamp,
            // Add name property to track source if from observer
-           ...(isFromObserver && { name: 'observer_proactive' })
+           ...(isFromObserver && { name: 'observer_proactive' }),
+           ...(tool_calls && tool_calls.length > 0 && { tool_calls: tool_calls })
        };
        this.addMessageToHistory(assistantMessage);
        
@@ -515,6 +666,7 @@ export class ChatModule {
    }
 
    /**
+
     * Returns a copy of the current chat history.
     * @returns A copy of the chat history array
     */
@@ -552,11 +704,15 @@ export class ChatModule {
            const validMessages = history.filter(msg =>
                msg &&
                typeof msg === 'object' &&
-               (msg.role === 'user' || msg.role === 'assistant') &&
-               typeof msg.content === 'string'
+               (msg.role === 'user' || msg.role === 'assistant' || msg.role === 'tool') &&
+               (typeof msg.content === 'string' || msg.content === null) && // content can be null
+               // Basic validation for tool messages
+               (msg.role !== 'tool' || (typeof msg.content === 'string' && msg.tool_call_id)) &&
+               // Basic validation for assistant tool_calls
+               (msg.role !== 'assistant' || !msg.tool_calls || (Array.isArray(msg.tool_calls) && msg.tool_calls.every(tc => tc.id && tc.type === 'function' && tc.function?.name && typeof tc.function?.arguments === 'string')))
            );
            
-           validMessages.forEach(msg => this.addMessageToHistory({ ...msg }));
+           validMessages.forEach(msg => this.addMessageToHistory({ ...msg })); // addMessageToHistory will handle further processing
            return this.chatHistory.length;
        } else {
            // Fast path: just copy the array directly (no validation/processing)
@@ -590,14 +746,15 @@ export class ChatModule {
        // We use a non-null assertion (!) here since we already checked index validity
        const currentMessage = this.chatHistory[index]!;
 
-       // Only allow updating user or assistant messages (not system)
-       if (currentMessage.role !== 'user' && currentMessage.role !== 'assistant') {
+       // Allow updating user, assistant, or tool messages (not system or observer)
+       if (currentMessage.role !== 'user' && currentMessage.role !== 'assistant' && currentMessage.role !== 'tool') {
            console.error(`[Animus SDK] Cannot update message with role: ${currentMessage.role}`);
            return false;
        }
 
-       // Only allow updating to valid roles (user or assistant)
-       if (updatedMessage.role && updatedMessage.role !== 'user' && updatedMessage.role !== 'assistant') {
+       // Only allow updating to valid roles (user, assistant, or tool)
+       const validUpdateRoles: ChatMessage['role'][] = ['user', 'assistant', 'tool'];
+       if (updatedMessage.role && !validUpdateRoles.includes(updatedMessage.role)) {
            console.error(`[Animus SDK] Cannot update message to invalid role: ${updatedMessage.role}`);
            return false;
        }
@@ -606,56 +763,75 @@ export class ChatModule {
        const originalMessage = this.chatHistory[index]!;
        
        // Create a properly typed merge that guarantees the required properties
-       // First make a copy of the original (ensures all required fields exist)
        const newMessage: ChatMessage = {
-           role: originalMessage.role,
-           content: originalMessage.content,
+           role: originalMessage.role, // Keep original role unless explicitly updated
+           content: originalMessage.content, // Keep original content unless explicitly updated
            name: originalMessage.name,
-           reasoning: originalMessage.reasoning
+           reasoning: originalMessage.reasoning,
+           tool_calls: originalMessage.tool_calls,
+           tool_call_id: originalMessage.tool_call_id,
+           timestamp: originalMessage.timestamp || new Date().toISOString() // Ensure timestamp
        };
        
-       // Then apply updates (ensuring role remains valid)
+       // Apply updates
        if (updatedMessage.role) {
            newMessage.role = updatedMessage.role;
        }
-       
-       if (updatedMessage.content !== undefined) {
+       if (updatedMessage.content !== undefined) { // Allows setting content to null
            newMessage.content = updatedMessage.content;
        }
-       
        if (updatedMessage.name !== undefined) {
            newMessage.name = updatedMessage.name;
        }
-       
        if (updatedMessage.reasoning !== undefined) {
            newMessage.reasoning = updatedMessage.reasoning;
        }
+       if (updatedMessage.tool_calls !== undefined) {
+           newMessage.tool_calls = updatedMessage.tool_calls;
+       }
+       if (updatedMessage.tool_call_id !== undefined) {
+           newMessage.tool_call_id = updatedMessage.tool_call_id;
+       }
+       if (updatedMessage.timestamp !== undefined) {
+           newMessage.timestamp = updatedMessage.timestamp;
+       }
+
 
        // If updating assistant message content, process thoughts
-       if (newMessage.role === 'assistant' && updatedMessage.content !== undefined) {
-           let finalContent = newMessage.content || '';
+       if (newMessage.role === 'assistant' && updatedMessage.content !== undefined && typeof newMessage.content === 'string') {
+           let finalContent = newMessage.content || ''; // Ensure it's a string for regex
            let reasoning: string | undefined = undefined;
 
-           // Extract reasoning from <think></think> blocks if present
            const thinkRegex = /<think>([\s\S]*?)<\/think>/;
            const match = finalContent.match(thinkRegex);
 
            if (match && match[0] && match[1]) {
                reasoning = match[1].trim();
-               // Replace the think block with nothing and ensure consistent spacing
-               finalContent = finalContent.replace(match[0], '').trim();
-               // Fix any double spaces that might occur when removing the block
-               finalContent = finalContent.replace(/\s{2,}/g, ' ');
+               finalContent = finalContent.replace(match[0], '').trim().replace(/\s{2,}/g, ' ');
            } else {
                finalContent = finalContent.trim();
            }
+           newMessage.content = finalContent || null; // Set to null if empty after processing
+           if (reasoning) newMessage.reasoning = reasoning;
+           else if (updatedMessage.reasoning === undefined) delete newMessage.reasoning; // Clear reasoning if not in update and removed by processing
+       }
 
-           // Update with processed content
-           newMessage.content = finalContent;
-           if (reasoning) {
-               newMessage.reasoning = reasoning;
+       // Validate tool message requirements if role is changed to 'tool' or content/id is updated
+       if (newMessage.role === 'tool') {
+           if (typeof newMessage.content !== 'string' || !newMessage.content.trim() || !newMessage.tool_call_id) {
+               console.error('[Animus SDK] Invalid tool message update: content must be non-empty string and tool_call_id is required.', newMessage);
+               return false;
            }
        }
+
+       // Validate assistant message with tool_calls
+       if (newMessage.role === 'assistant' && newMessage.tool_calls && newMessage.tool_calls.length > 0 && newMessage.content !== null) {
+           // As per OpenAI spec, if tool_calls is present, content should be null.
+           // However, some models might return content alongside tool_calls (e.g. for thought process).
+           // We will allow content here but log a warning if it's not best practice.
+           // console.warn("[Animus SDK] Assistant message has both tool_calls and content. While allowed, standard practice is for content to be null when tool_calls are present.");
+       }
+
 
        // Update the history
        this.chatHistory[index] = newMessage;
