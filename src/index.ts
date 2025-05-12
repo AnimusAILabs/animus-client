@@ -2,7 +2,17 @@
 export { AnimusClient } from './AnimusClient';
 
 // Configuration and Error Types
-export type { AnimusClientOptions } from './AnimusClient';
+export type {
+  AnimusClientOptions,
+  AnimusClientEventMap,
+  // Observer-specific event data interfaces
+  ObserverChunkData,
+  ObserverCompleteData,
+  ObserverErrorData,
+  ObserverSessionEndedData,
+  // Stream Source type
+  StreamSource
+} from './AnimusClient';
 export { AuthenticationError, ApiError } from './AnimusClient'; // Re-exported from AnimusClient
 
 // Chat Module Types
@@ -10,7 +20,9 @@ export type {
   ChatMessage,
   ChatCompletionRequest,
   ChatCompletionResponse,
-  ChatCompletionChunk
+  ChatCompletionChunk,
+  Tool,
+  ToolCall
 } from './Chat';
 
 // Media Module Types
@@ -22,6 +34,9 @@ export type {
   MediaAnalysisResultResponse,
   MediaAnalysisStatusResponse
 } from './Media';
+
+// Re-export ConnectionState from livekit-client for easier consumption
+export { ConnectionState } from 'livekit-client';
 
 // --- Usage Example (for documentation/testing later) ---
 /*
