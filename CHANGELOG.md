@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/AnimusAILabs/animus-client/compare/v1.4.0...v1.5.0) (2025-05-12)
+
+
+### Features
+
+* Adding delcaration file for typescript typings ([e3d7371](https://github.com/AnimusAILabs/animus-client/commit/e3d7371a6698f8f87c8605f8bd816b5ea5d49e57))
+
 # [1.4.0](https://github.com/AnimusAILabs/animus-client/compare/v1.3.0...v1.4.0) (2025-05-07)
 
 
