@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/AnimusAILabs/animus-client/compare/v1.5.0...v1.6.0) (2025-05-14)
+
+
+### Features
+
+* Adding reasoning/thinking feature to chat ([95b3bb8](https://github.com/AnimusAILabs/animus-client/commit/95b3bb8cc78aa5516f5d24d9ec9f035c8953af76))
+
 # [1.5.0](https://github.com/AnimusAILabs/animus-client/compare/v1.4.0...v1.5.0) (2025-05-12)
 
 
