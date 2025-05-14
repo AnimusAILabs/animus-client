@@ -84,6 +84,7 @@ interface ChatCompletionChunkChoiceDelta {
   content?: string | null; // Can be null
   // For streaming, tool_calls might be partial and include an index
   tool_calls?: (Partial<ToolCall> & { index: number; function?: Partial<ToolCall['function']> })[];
+  reasoning?: string | null; // New field for reasoning content in chunks
 }
 
 interface ChatCompletionChunkChoice {
@@ -199,6 +200,16 @@ export class ChatModule {
         tools: request.tools ?? defaults.tools,
         // tool_choice is set below based on presence of tools
     };
+
+    // Add reasoning parameters if enabled in config or request
+    // When enabled, this includes the model's reasoning process in the response
+    // For non-streaming, this adds a 'reasoning' field to the response message
+    // For streaming, the thinking content is included directly in the stream
+    const reasoningEnabled = 'reasoning' in request ? request.reasoning : defaults.reasoning;
+    if (reasoningEnabled) {
+        payload.reasoning = true;
+        payload.show_reasoning = true;
+    }
 
     // Set tool_choice to "auto" if tools are present, otherwise leave it undefined (or "none" if explicitly set in request)
     if (payload.tools && payload.tools.length > 0) {
@@ -474,10 +485,10 @@ export class ChatModule {
    * Note: When a user message is sent, it also resets the inactivity timer for the observer.
    */
   // Return type matches completions now
-  // Allow 'stream' override in options
+  // Allow 'stream' and 'reasoning' options
   public async send(
       messageContent: string,
-      options?: Omit<ChatCompletionRequest, 'messages' | 'model'> & { model?: string } // Removed 'stream' from Omit
+      options?: Omit<ChatCompletionRequest, 'messages' | 'model'> & { model?: string } // Type includes all ChatCompletionRequest properties except messages and model
   ): Promise<ChatCompletionResponse | AsyncIterable<ChatCompletionChunk>> {
       
       // Add timestamp to user message
@@ -524,6 +535,16 @@ export class ChatModule {
               delete (completionRequest as any)[key];
           }
       });
+      
+      // Add reasoning parameters if enabled in config or request options
+      // This enables the model to show its reasoning process in the response
+      // When reasoning is true, the API includes reasoning content in the response
+      // For streaming, the reasoning content comes as part of the normal content stream
+      const reasoningEnabled = 'reasoning' in requestOptions ? requestOptions.reasoning : defaults.reasoning;
+      if (reasoningEnabled) {
+          (completionRequest as Record<string, any>).reasoning = true;
+          (completionRequest as Record<string, any>).show_reasoning = true;
+      }
       // --- End Prepare HTTP API Request ---
 
 

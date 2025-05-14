@@ -64,6 +64,15 @@ export interface AnimusChatOptions {
    * Default: true
    */
   compliance?: boolean;
+  
+  /**
+   * Optional: Enable/disable reasoning output.
+   * When true, adds "reasoning": true and "show_reasoning": true to requests.
+   * For non-streaming, this adds a 'reasoning' field to the response message.
+   * For streaming, the thinking content is included directly in the stream.
+   * Default: false
+   */
+  reasoning?: boolean;
 
   // --- SDK Specific ---
   /** Optional: Number of past messages (excluding system message) to maintain internally for context. Defaults to 0 (no history). */

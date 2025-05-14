@@ -11,6 +11,7 @@ const maxTokensInput = document.getElementById('max-tokens-input');
 const temperatureInput = document.getElementById('temperature-input');
 const streamInput = document.getElementById('stream-input');
 const complianceInput = document.getElementById('compliance-input');
+const reasoningInput = document.getElementById('reasoning-input');
 const toolsInput = document.getElementById('tools-input');
 
 // Observer UI Elements
@@ -78,12 +79,12 @@ function updateConnectionButtons(state) {
 function addMessageToChat(role, text) {
     const messageElement = document.createElement('div');
     // Base classes for all messages
-    messageElement.classList.add('p-2', 'px-4', 'rounded-lg', 'max-w-[80%]', 'break-words', 'leading-snug', 'message'); // Added 'message' back
+    messageElement.classList.add('p-2', 'px-4', 'rounded-lg', 'max-w-[80%]', 'break-words', 'leading-snug', 'message', 'border'); // Added 'border' class
 
     if (role === 'user') {
-        messageElement.classList.add('self-end', 'bg-blue-500', 'text-white', 'rounded-br-none', 'user'); // Added 'user'
+        messageElement.classList.add('self-end', 'bg-blue-500', 'text-white', 'rounded-br-none', 'user', 'border-transparent'); // Added 'user' and transparent border
     } else { // assistant or typing indicator base
-        messageElement.classList.add('self-start', 'bg-gray-200', 'text-gray-800', 'rounded-bl-none', 'whitespace-pre-wrap', 'assistant'); // Added 'assistant'
+        messageElement.classList.add('self-start', 'bg-gray-200', 'text-gray-800', 'rounded-bl-none', 'whitespace-pre-wrap', 'assistant', 'border-transparent'); // Added 'assistant' and transparent border
     }
 
     messageElement.textContent = text; // Use textContent for security
@@ -131,35 +132,37 @@ async function initializeAndTest() {
     try {
         // --- Read initial config FROM the form elements ---
         const initialChatOptions = {
-            model: 'vivian-llama3.1-70b-1.0-fp8',
+            model: 'animafmngvy7-xavier-r1',
             systemMessage: systemPromptInput.value,
             historySize: parseInt(historySizeInput.value, 10) || 30,
             temperature: parseFloat(temperatureInput.value) || 0.7,
             stream: streamInput.checked, // Read stream preference
             maxTokens: parseInt(maxTokensInput.value, 10) || 1024,
+            reasoning: reasoningInput.checked, // Read reasoning preference
             tools: undefined // Placeholder, will be set below
         };
 
         // Parse tools
-        try {
-            const toolsJson = toolsInput.value.trim();
-            if (toolsJson) {
-                const parsedTools = JSON.parse(toolsJson);
-                if (Array.isArray(parsedTools)) {
-                    initialChatOptions.tools = parsedTools;
-                    logOutput("Successfully parsed tools from UI.", parsedTools);
-                } else {
-                    logOutput("Tools input is not a valid JSON array. Ignoring.", true);
-                }
-            }
-        } catch (e) {
-            logOutput(`Error parsing tools JSON: ${e.message}. Ignoring tools input.`, true);
-        }
+        // try {
+        //     const toolsJson = toolsInput.value.trim();
+        //     if (toolsJson) {
+        //         const parsedTools = JSON.parse(toolsJson);
+        //         if (Array.isArray(parsedTools)) {
+        //             initialChatOptions.tools = parsedTools;
+        //             logOutput("Successfully parsed tools from UI.", parsedTools);
+        //         } else {
+        //             logOutput("Tools input is not a valid JSON array. Ignoring.", true);
+        //         }
+        //     }
+        // } catch (e) {
+        //     logOutput(`Error parsing tools JSON: ${e.message}. Ignoring tools input.`, true);
+        // }
 
         const initialComplianceOptions = { enabled: complianceInput.checked };
 
         // --- Instantiate the client with config read from form ---
         client = new AnimusSDK.AnimusClient({
+            apiBaseUrl: 'https://api-dev.animusai.co/v3',
             tokenProviderUrl: tokenProviderUrl,
             chat: initialChatOptions,
             observer: {
@@ -314,29 +317,33 @@ async function initializeAndTest() {
             typingIndicatorElement.classList.remove('bg-gray-200', 'text-gray-800');
             typingIndicatorElement.classList.add('bg-gray-100', 'text-gray-500', 'italic');
 
-            // Determine if streaming is enabled based on the checkbox
+            // Determine if streaming and reasoning are enabled based on the checkboxes
             const isStreaming = streamInput.checked;
+            const isReasoningEnabled = reasoningInput.checked;
             
             // Prepare message options
-            const messageOptions = { stream: isStreaming };
+            const messageOptions = {
+                stream: isStreaming,
+                reasoning: isReasoningEnabled
+            };
             
             // Parse tools from UI to use for this message
-            try {
-                const toolsJson = toolsInput.value.trim();
-                if (toolsJson) {
-                    const parsedTools = JSON.parse(toolsJson);
-                    if (Array.isArray(parsedTools)) {
-                        messageOptions.tools = parsedTools;
-                        logOutput("Using tools from UI for this message:", parsedTools);
-                        
-                        // Enhanced debugging logs
-                        console.log("Tools being sent:", JSON.stringify(parsedTools, null, 2));
-                        console.log("Full messageOptions:", JSON.stringify(messageOptions, null, 2));
-                    }
-                }
-            } catch (e) {
-                logOutput(`Error parsing tools JSON: ${e.message}. Not using tools for this message.`, true);
-            }
+            // try {
+            //     const toolsJson = toolsInput.value.trim();
+            //     if (toolsJson) {
+            //         const parsedTools = JSON.parse(toolsJson);
+            //         if (Array.isArray(parsedTools)) {
+            //             messageOptions.tools = parsedTools;
+            //             logOutput("Using tools from UI for this message:", parsedTools);
+            //
+            //             // Enhanced debugging logs
+            //             console.log("Tools being sent:", JSON.stringify(parsedTools, null, 2));
+            //             console.log("Full messageOptions:", JSON.stringify(messageOptions, null, 2));
+            //         }
+            //     }
+            // } catch (e) {
+            //     logOutput(`Error parsing tools JSON: ${e.message}. Not using tools for this message.`, true);
+            // }
 
             try {
                 // Add a simple monkey patch to verify what's in the actual API payload
@@ -364,61 +371,87 @@ async function initializeAndTest() {
                     let accumulatedStreamToolCalls = []; // To accumulate tool calls from stream
                     let streamFinishReason = null;
 
-                    for await (const chunk of responseOrStream) {
-                        logOutput("HTTP Chunk:", chunk);
-                        removeTypingIndicator(); // Remove indicator on first chunk
-
-                        const choice = chunk.choices?.[0];
-                        if (!choice) continue;
-
-                        // Create message bubble if it doesn't exist
-                        if (!httpAssistantMessageElement) {
+                    // Create a function for fast token-by-token rendering
+                    const processStreamWithVisibleTokens = async () => {
+                        try {
+                            // Create message bubble immediately for a more responsive feel
                             httpAssistantMessageElement = addMessageToChat('assistant', '');
-                        }
-
-                        if (choice.delta?.content) {
-                            accumulatedStreamContent += choice.delta.content;
-                        }
-
-                        if (choice.delta?.tool_calls) {
-                            choice.delta.tool_calls.forEach(tcPart => {
-                                const { index, ...toolCallDelta } = tcPart;
-                                while (accumulatedStreamToolCalls.length <= index) {
-                                    accumulatedStreamToolCalls.push({ function: { arguments: "" } }); // Simplified placeholder
-                                }
-                                const targetCall = accumulatedStreamToolCalls[index];
-                                if (toolCallDelta.id) targetCall.id = toolCallDelta.id;
-                                if (toolCallDelta.type) targetCall.type = toolCallDelta.type;
-                                if (toolCallDelta.function) {
-                                    if (!targetCall.function) targetCall.function = { name: "", arguments: "" };
-                                    if (toolCallDelta.function.name) targetCall.function.name = toolCallDelta.function.name;
-                                    if (toolCallDelta.function.arguments) targetCall.function.arguments += toolCallDelta.function.arguments;
-                                }
-                            });
-                        }
-                        
-                        if (choice.finish_reason) {
-                            streamFinishReason = choice.finish_reason;
-                        }
-
-                        // Update UI: Prioritize tool calls if they are forming
-                        if (accumulatedStreamToolCalls.length > 0) {
-                            httpAssistantMessageElement.textContent = `Tool call(s) requested:\n${JSON.stringify(accumulatedStreamToolCalls, null, 2)}`;
-                            httpAssistantMessageElement.classList.add('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
-                        } else {
-                            httpAssistantMessageElement.textContent = accumulatedStreamContent;
-                             httpAssistantMessageElement.classList.remove('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
-                        }
-                        
-                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
-
-                        if (chunk.compliance_violations && chunk.compliance_violations.length > 0) {
-                            console.warn("HTTP Stream: Compliance violation detected mid-stream:", chunk.compliance_violations);
-                            if (httpAssistantMessageElement) {
-                                httpAssistantMessageElement.classList.add('border-2', 'border-red-500');
+                            
+                            // Add visual indicator when reasoning is enabled
+                            if (reasoningInput.checked) {
+                                httpAssistantMessageElement.classList.add('border-blue-500');
+                                httpAssistantMessageElement.title = "Reasoning enabled for this response";
                             }
+                            
+                            removeTypingIndicator();
+                            
+                            // Process the stream as fast as possible
+                            for await (const chunk of responseOrStream) {
+                                logOutput("HTTP Chunk:", chunk);
+                                
+                                const choice = chunk.choices?.[0];
+                                if (!choice) continue;
+
+                                if (choice.delta?.content) {
+                                    // Get just the new content for this chunk
+                                    const newContent = choice.delta.content;
+                                    
+                                    // Add to accumulated content
+                                    accumulatedStreamContent += newContent;
+                                    
+                                    // Use requestAnimationFrame for smoother visual updates - no delay
+                                    requestAnimationFrame(() => {
+                                        // Update UI with new content immediately
+                                        if (accumulatedStreamToolCalls.length === 0) {
+                                            httpAssistantMessageElement.textContent = accumulatedStreamContent;
+                                        }
+                                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                                    });
+                                }
+
+                                if (choice.delta?.tool_calls) {
+                                    choice.delta.tool_calls.forEach(tcPart => {
+                                        const { index, ...toolCallDelta } = tcPart;
+                                        while (accumulatedStreamToolCalls.length <= index) {
+                                            accumulatedStreamToolCalls.push({ function: { arguments: "" } });
+                                        }
+                                        const targetCall = accumulatedStreamToolCalls[index];
+                                        if (toolCallDelta.id) targetCall.id = toolCallDelta.id;
+                                        if (toolCallDelta.type) targetCall.type = toolCallDelta.type;
+                                        if (toolCallDelta.function) {
+                                            if (!targetCall.function) targetCall.function = { name: "", arguments: "" };
+                                            if (toolCallDelta.function.name) targetCall.function.name = toolCallDelta.function.name;
+                                            if (toolCallDelta.function.arguments) targetCall.function.arguments += toolCallDelta.function.arguments;
+                                        }
+                                    });
+                                    
+                                    // Update tool call display
+                                    requestAnimationFrame(() => {
+                                        httpAssistantMessageElement.textContent = `Tool call(s) requested:\n${JSON.stringify(accumulatedStreamToolCalls, null, 2)}`;
+                                        httpAssistantMessageElement.classList.add('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
+                                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                                    });
+                                }
+                                
+                                if (choice.finish_reason) {
+                                    streamFinishReason = choice.finish_reason;
+                                }
+
+                                if (chunk.compliance_violations && chunk.compliance_violations.length > 0) {
+                                    console.warn("HTTP Stream: Compliance violation detected mid-stream:", chunk.compliance_violations);
+                                    if (httpAssistantMessageElement) {
+                                        httpAssistantMessageElement.classList.add('border-2', 'border-red-500');
+                                    }
+                                }
+                            }
+                        } catch (error) {
+                            console.error("Error in stream processing:", error);
+                            throw error;
                         }
-                    }
+                    };
+                    
+                    // Start processing the stream with enhanced token visualization
+                    await processStreamWithVisibleTokens();
                     logOutput("HTTP Stream finished.");
                      if (streamFinishReason === 'tool_calls' && accumulatedStreamToolCalls.length > 0 && !accumulatedStreamContent) {
                         // Already displayed by the loop
@@ -440,13 +473,22 @@ async function initializeAndTest() {
                     const message = response.choices?.[0]?.message;
                     let displayContent = "";
                     let messageStyles = [];
+                    let reasoningContent = null;
 
                     if (message?.tool_calls && message.tool_calls.length > 0) {
                         displayContent = `Tool call(s) requested:\n${JSON.stringify(message.tool_calls, null, 2)}`;
                         logOutput("Tool calls detected:", message.tool_calls);
                         messageStyles = ['text-xs', 'bg-yellow-100', 'border', 'border-yellow-300', 'whitespace-pre-wrap'];
                     } else if (message?.content) {
-                        displayContent = message.content;
+                        // If reasoning content is available and reasoning is enabled, show it directly in the message
+                        if (reasoningInput.checked && message.reasoning) {
+                            reasoningContent = message.reasoning;
+                            logOutput("Reasoning content received:", reasoningContent);
+                            displayContent = `[Reasoning]\n${reasoningContent}\n\n[Response]\n${message.content}`;
+                            messageStyles.push('whitespace-pre-wrap'); // Ensure proper formatting
+                        } else {
+                            displayContent = message.content;
+                        }
                     } else {
                         displayContent = "[No content or tool_calls in response]";
                         logOutput("No textual content or tool_calls in response.", response);
@@ -455,6 +497,12 @@ async function initializeAndTest() {
                     const assistantMsgElement = addMessageToChat('assistant', displayContent);
                     if (messageStyles.length > 0) {
                         assistantMsgElement.classList.add(...messageStyles);
+                    }
+                    
+                    // Add visual indicator when reasoning is enabled
+                    if (reasoningInput.checked) {
+                        assistantMsgElement.classList.add('border-blue-500');
+                        assistantMsgElement.title = "Reasoning enabled for this response";
                     }
 
 

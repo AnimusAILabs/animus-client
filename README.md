@@ -163,6 +163,7 @@ const client = new AnimusClient({
     // min_p: 0.0,          // Default: 0
     // length_penalty: 1.0, // Default: 1
     compliance: true,       // Default: true (Enables content moderation)
+    reasoning: false,       // Default: false (When true, enables reasoning/thinking content from the model)
 
     // --- Optional SDK Specific ---
     historySize: 30         // Default: 0 (disabled) number of turns to send to the LLM for conversational context
@@ -207,6 +208,7 @@ const client = new AnimusClient({
     *   `min_p` (optional, `number`, default: 0): Minimum probability threshold for tokens.
     *   `length_penalty` (optional, `number`, default: 1): Adjusts impact of sequence length.
     *   `compliance` (optional, `boolean`, default: true): Enables content moderation (see **Content Compliance** section below).
+    *   `reasoning` (optional, `boolean`, default: false): For non-streaming responses, this adds a `reasoning` field to the response message. For streaming, the thinking content will be included directly in the response stream.
     *   `historySize` (optional, `number`, default: 0): Enables automatic chat history management (SDK feature).
 *   `vision` (optional, `AnimusVisionOptions`): If provided, enables vision features and sets defaults.
     *   `model` (**required** if `vision` provided, `string`): Default model for vision requests.
@@ -251,6 +253,7 @@ try {
     "Tell me about the Animus Client SDK.",
     { // Optional overrides for this specific request (used only in HTTP fallback)
       temperature: 0.8,
+      reasoning: true, // Enable reasoning to see the model's thinking process
       // model: 'specific-model-override' // Can override model here too
     }
   );
@@ -289,9 +292,16 @@ try {
     messages: messages,
     model: 'override-model-if-needed', // Optional: overrides configured default
     max_tokens: 100, // Optional override
-    stream: false // Explicitly non-streaming
+    stream: false, // Explicitly non-streaming
+    reasoning: true // Enable reasoning to see the model's thinking process
   });
   console.log("AI Poem:", response.choices[0].message.content);
+  
+  // Access reasoning content if available
+  if (response.choices[0].message.reasoning) {
+    console.log("Reasoning:", response.choices[0].message.reasoning);
+  }
+  
   // Check compliance violations if needed: response.compliance_violations
 } catch (error) { /* ... */ }
 
@@ -306,9 +316,11 @@ try {
 try {
   await client.chat.completions({
     messages: messages,
-    stream: true // Enable streaming
+    stream: true, // Enable streaming
+    reasoning: true // Enable reasoning to see the model's thinking process in the stream
   });
   console.log("Streaming request initiated. Waiting for events...");
+  console.log("Note: When streaming with reasoning enabled, thinking content will appear directly in the stream");
 } catch (error) { /* ... */ }
 ```
 
