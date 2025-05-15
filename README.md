@@ -77,22 +77,26 @@ async function main() {
     console.log('Chat Response:', chatResponse.choices[0].message.content);
 
     // --- Example: Streaming Chat Completion ---
-    // Set up listeners first (see API Documentation -> Streaming Events)
-    client.on('streamChunk', (data) => {
-        if (data.deltaContent) process.stdout.write(data.deltaContent);
-    });
-    client.on('streamComplete', (data) => {
-        console.log('\nStream finished. Full content:', data.fullContent);
-    });
-    client.on('streamError', (data) => {
-        console.error('\nStream error:', data.error);
-    });
-
-    // Start the stream (returns AsyncIterable, but events handle UI updates)
-    await client.chat.completions({
-      messages: messages,
-      stream: true
-    });
+    // Use AsyncIterable for streaming
+    try {
+      const stream = await client.chat.completions({
+        messages: messages,
+        stream: true
+      });
+      
+      let fullContent = '';
+      
+      // Process each chunk as it arrives
+      for await (const chunk of stream) {
+        const delta = chunk.choices?.[0]?.delta?.content || '';
+        fullContent += delta;
+        process.stdout.write(delta); // Update UI incrementally
+      }
+      
+      console.log('\nStream finished. Full content:', fullContent);
+    } catch (error) {
+      console.error('\nStream error:', error);
+    }
 
 
     // --- Example: Media Analysis (Image) ---
@@ -247,7 +251,7 @@ import { ApiError, AuthenticationError } from 'animus-client';
 
 // Assumes client was initialized with chat options (model, systemMessage)
 try {
-  // If Observer is connected, this returns void and response comes via stream* events.
+  // If Observer is connected, this returns void and response comes via observer events.
   // If Observer is NOT connected, this returns the ChatCompletionResponse directly.
   const response = await client.chat.send(
     "Tell me about the Animus Client SDK.",
@@ -271,7 +275,7 @@ try {
   else console.error("Error:", error);
 }
 ```
-*   **Behavior:** If the LiveKit Observer is enabled and connected (see Section 5), `send()` routes the message via the observer, returns `undefined` immediately, and the response arrives via the unified `streamChunk`/`streamComplete`/`streamError` events. If the observer is not connected, `send()` falls back to a standard non-streaming HTTP request and returns the `ChatCompletionResponse`.
+*   **Behavior:** If the LiveKit Observer is enabled and connected (see Section 5), `send()` routes the message via the observer, returns `undefined` immediately, and the response arrives via observer events like `observerComplete`. If the observer is not connected, `send()` falls back to a standard non-streaming HTTP request and returns the `ChatCompletionResponse`.
 
 **b) Full Completions (`client.chat.completions`)**
 
@@ -305,21 +309,24 @@ try {
   // Check compliance violations if needed: response.compliance_violations
 } catch (error) { /* ... */ }
 
-// Streaming (Event-based):
-// Set up event listeners first (see Section 5c: Unified Streaming Events)
-// client.on('streamChunk', ...);
-// client.on('streamComplete', ...);
-// client.on('streamError', ...);
-
-// Start the stream - this doesn't return content directly via await
-// Instead, it triggers the events above.
+// Streaming (AsyncIterable-based):
 try {
-  await client.chat.completions({
+  const stream = await client.chat.completions({
     messages: messages,
     stream: true, // Enable streaming
     reasoning: true // Enable reasoning to see the model's thinking process in the stream
   });
-  console.log("Streaming request initiated. Waiting for events...");
+  
+  let fullContent = '';
+  
+  // Process each chunk as it arrives
+  for await (const chunk of stream) {
+    const delta = chunk.choices?.[0]?.delta?.content || '';
+    fullContent += delta;
+    console.log("Content so far:", fullContent);
+  }
+  
+  console.log("Stream complete. Final content:", fullContent);
   console.log("Note: When streaming with reasoning enabled, thinking content will appear directly in the stream");
 } catch (error) { /* ... */ }
 ```
@@ -487,62 +494,99 @@ The SDK manages the LiveKit connection lifecycle internally when `observer.enabl
 *   **Manual Disconnection:** `await client.disconnectObserverManually();`
 *   **Connection Status Events:** Listen for `observerConnecting`, `observerConnected`, `observerDisconnected`, `observerReconnecting`, `observerReconnected`, and `observerError` events on the `client` instance to track the connection state.
 
-**c) Unified Streaming Events**
+**c) Streaming Implementation**
 
-Whether a response comes via the Observer or standard HTTP streaming (`client.chat.completions({ stream: true })`), the SDK uses a **unified set of events** emitted by the `AnimusClient` instance:
-
-*   `streamChunk`: Fired for each piece of data received. Contains `source` ('observer'|'http'), `chunk` (raw data), `deltaContent`, `compliance_violations`.
-*   `streamComplete`: Fired when the stream finishes successfully. Contains `source`, `fullContent`, `usage`, `compliance_violations`.
-*   `streamError`: Fired if an error occurs during the stream. Contains `source`, `error` (message).
-*   `observerSessionEnded`: Fired when the observer agent signals that proactive messaging has stopped. Contains `participantIdentity` and `reason` ('max_messages_reached' | 'session_ended').
+For HTTP streaming responses, the SDK now uses the **AsyncIterable** pattern instead of events:
 
 ```typescript
-import { StreamChunkData, StreamCompleteData, StreamErrorData } from 'animus-client';
+// Using AsyncIterable pattern for streaming
+try {
+  // Get a stream of chunks
+  const stream = await client.chat.completions({
+    messages: [{ role: 'user', content: 'Hello!' }],
+    stream: true
+  });
 
-let currentAssistantResponse = ''; // Accumulator
+  let fullContent = '';
 
-client.on('streamChunk', (data: StreamChunkData) => {
-  console.log(`Chunk from ${data.source}:`, data.chunk); // data.source is 'observer' or 'http'
-  if (data.deltaContent) {
-    currentAssistantResponse += data.deltaContent;
+  // Process each chunk with standard async/await syntax
+  for await (const chunk of stream) {
+    // Extract content delta
+    const delta = chunk.choices?.[0]?.delta?.content || '';
+    
+    // Accumulate content
+    fullContent += delta;
+    
     // Update UI incrementally
+    console.log('Content so far:', fullContent);
   }
-  // Note: Compliance violations are typically only sent with non-streaming responses
+  
+  // Stream completed successfully
+  console.log('Final content:', fullContent);
+} catch (error) {
+  // Handle any streaming errors
+  console.error('Stream error:', error);
+}
+
+// --- Observer Events ---
+
+// Import the observer event data types
+import {
+  ObserverChunkData,
+  ObserverCompleteData,
+  ObserverErrorData,
+  ObserverSessionEndedData
+} from 'animus-client';
+
+// The observer uses a different set of events
+// Each event type has its own data structure
+
+// ObserverChunkData is emitted during streaming from the observer
+client.on('observerChunk', (data: ObserverChunkData) => {
+  // data contains:
+  // - participantIdentity: string - ID of the participant sending the chunk
+  // - chunk: ChatCompletionChunk - The raw chunk object
+  // - deltaContent?: string - Content delta from the chunk (if any)
+  // - compliance_violations?: string[] | null - Any compliance violations
+  
+  console.log(`Chunk from ${data.participantIdentity}:`, data.deltaContent);
 });
 
-client.on('streamComplete', (data: StreamCompleteData) => {
-  console.log(`Stream complete from ${data.source}:`, data);
-  // Finalize UI update with data.fullContent
-  // SDK handles history update internally
-
-  currentAssistantResponse = ''; // Reset accumulator
+// ObserverCompleteData is emitted when observer message is complete
+client.on('observerComplete', (data: ObserverCompleteData) => {
+  // data contains:
+  // - participantIdentity: string - ID of the participant
+  // - fullContent: string - Final content of the message
+  // - usage?: {...} | null - Usage statistics if available
+  // - compliance_violations?: string[] | null - Final compliance violations
+  // - observer_metadata?: any - Observer metadata with decision information
+  // - rawContent?: string - Original message content before processing
+  
+  console.log('Observer message:', data.fullContent);
+  
+  // Check if this is a proactive message
+  if (data.observer_metadata?.is_proactive) {
+    console.log('Received proactive message from observer agent');
+  }
 });
 
-client.on('streamError', (data: StreamErrorData) => {
-  console.error(`Stream error from ${data.source}:`, data.error);
-  // Update UI to show error
-  currentAssistantResponse = ''; // Reset accumulator
+// ObserverErrorData is emitted when an error occurs with the observer
+client.on('observerStreamError', (data: ObserverErrorData) => {
+  // data contains:
+  // - participantIdentity: string - ID of the participant
+  // - error: string - The error message
+  
+  console.error('Observer error:', data.error);
 });
 
-// --- Triggering Streams ---
-
-// 1. Via Observer (if connected) using chat.send()
-//    Returns void, response comes via stream* events above.
-try {
-    // Ensure observer is connected first via connectObserverManually() and 'observerConnected' event
-    await client.chat.send("Hello via observer!");
-} catch(e) { /* handle send error */ }
-
-
-// 2. Via HTTP using chat.completions()
-//    Also emits stream* events above.
-try {
-    await client.chat.completions({
-        messages: [{ role: 'user', content: 'Hello via HTTP stream!' }],
-        stream: true
-    });
-} catch(e) { /* handle completions error */ }
-
+// ObserverSessionEndedData is emitted when observer signals end of proactive messaging
+client.on('observerSessionEnded', (data: ObserverSessionEndedData) => {
+  // data contains:
+  // - participantIdentity: string - ID of the participant
+  // - reason: 'max_messages_reached' | 'session_ended' - Reason for ending
+  
+  console.log(`Observer session ended. Reason: ${data.reason}`);
+});
 ```
 
 **d) Sending Messages via `client.chat.send()`**
@@ -551,9 +595,9 @@ When the observer is enabled and connected, `client.chat.send(messageContent)`:
 1.  Constructs the payload (system message, history, user message).
 2.  Sends it via the LiveKit data channel.
 3.  Returns `undefined` immediately.
-4.  The response arrives via the unified `streamChunk`, `streamComplete`, and `streamError` events.
+4.  The response arrives via observer events such as `observerComplete`.
 
-If the observer is *not* connected, `client.chat.send()` falls back to a standard non-streaming HTTP API request and returns the `ChatCompletionResponse` directly (no stream events are emitted in this fallback case).
+If the observer is *not* connected, `client.chat.send()` falls back to a standard non-streaming HTTP API request and returns the `ChatCompletionResponse` directly.
 
 **e) Observer Proactive Messaging**
 
@@ -564,9 +608,9 @@ The observer agent analyzes the conversation history after each AI assistant res
 
 These proactive messages are delivered through the unified streaming events with special metadata:
 ```typescript
-client.on('streamComplete', (data) => {
+client.on('observerComplete', (data) => {
   // Check if this is a proactive message from the observer
-  if (data.source === 'observer' && data.observer_metadata?.is_proactive) {
+  if (data.observer_metadata?.is_proactive) {
     console.log('Observer proactive message:', data.fullContent);
     // Handle the proactive message in your UI
   }
