@@ -142,6 +142,34 @@ export class ChatModule {
      }
      // Note: Model check happens within completions/send if needed
    }
+   
+   /**
+    * Updates the configuration options for this chat module.
+    * Allows changing the system message, temperature, etc. dynamically.
+    * @param config Updated chat configuration options
+    */
+   public updateConfig(config: AnimusChatOptions): void {
+     // Skip if no config provided
+     if (!config) return;
+
+     // Update the stored config
+     this.config = config;
+
+     // Update system message if it changed
+     if (config.systemMessage) {
+       this.systemMessage = { role: 'system', content: config.systemMessage };
+     }
+
+     console.log('[Animus SDK] ChatModule configuration updated:', JSON.stringify({
+       model: config.model,
+       systemMessage: config.systemMessage ? `${config.systemMessage.substring(0, 20)}...` : undefined,
+       historySize: config.historySize,
+       temperature: config.temperature,
+       stream: config.stream,
+       max_tokens: config.max_tokens,
+       reasoning: config.reasoning
+     }));
+   }
 
   /**
    * Creates a model response for the given chat conversation.

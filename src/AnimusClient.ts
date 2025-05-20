@@ -727,6 +727,65 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
   }
   
   /**
+   * Updates the chat configuration that will be used for future requests.
+   * This allows dynamically changing system message, temperature, etc. without recreating the client.
+   * @param config New chat configuration options
+   */
+  public updateChatConfig(config: Partial<AnimusChatOptions>): void {
+    // Skip if no config provided
+    if (!config) return;
+    
+    // Create new chat options by merging existing with new
+    const existingConfig = this.options.chat || {} as AnimusChatOptions;
+    
+    // We need to ensure model and systemMessage are present
+    this.options.chat = {
+      ...existingConfig,
+      ...config,
+      // Ensure required fields are present after merge
+      model: config.model || existingConfig.model || '',
+      systemMessage: config.systemMessage || existingConfig.systemMessage || ''
+    };
+
+    // Make sure required options are still present
+    const chatOptions = this.options.chat;
+    if (!chatOptions?.model || !chatOptions?.systemMessage) {
+      throw new Error('Chat configuration must include model and systemMessage');
+    }
+
+    // Update the chat module with new config
+    if (this.chat && this.options.chat) {
+      this.chat.updateConfig(this.options.chat);
+    }
+
+    console.log('[Animus SDK] Chat configuration updated:', this.options.chat);
+  }
+
+  /**
+   * Updates compliance configuration parameters
+   * @param config New compliance configuration
+   */
+  public updateComplianceConfig(config: { enabled: boolean }): void {
+    // Skip if no config provided
+    if (!config) return;
+
+    // If chat options don't exist yet, create them
+    if (!this.options.chat) {
+      throw new Error('Cannot update compliance config: chat options not initialized');
+    }
+
+    // Update the compliance setting
+    this.options.chat.compliance = config.enabled;
+    
+    // Update the chat module with new config
+    if (this.chat && this.options.chat) {
+      this.chat.updateConfig(this.options.chat);
+    }
+
+    console.log('[Animus SDK] Compliance configuration updated:', config);
+  }
+
+  /**
    * Updates observer configuration parameters and sends them to the backend agent
    * @param config Configuration parameters to update
    */

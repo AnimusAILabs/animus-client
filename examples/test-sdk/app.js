@@ -664,5 +664,95 @@ async function initializeAndTest() {
     }
 }
 
+// --- Dynamic Chat Configuration Update Handler ---
+function updateChatConfig() {
+    if (!client) {
+        console.warn("Client not initialized, cannot update chat config");
+        return;
+    }
+    
+    try {
+        // Create updated chat configuration from form values
+        const updatedChatConfig = {
+            model: 'animafmngvy7-xavier-r1', // Keep model the same
+            systemMessage: systemPromptInput.value,
+            historySize: parseInt(historySizeInput.value, 10) || 30,
+            temperature: parseFloat(temperatureInput.value) || 0.7,
+            stream: streamInput.checked,
+            max_tokens: parseInt(maxTokensInput.value, 10) || 1024,
+            reasoning: reasoningInput.checked,
+        };
+
+        // Parse tools if needed
+        try {
+            const toolsJson = toolsInput.value.trim();
+            if (toolsJson) {
+                const parsedTools = JSON.parse(toolsJson);
+                if (Array.isArray(parsedTools)) {
+                    updatedChatConfig.tools = parsedTools;
+                }
+            }
+        } catch (e) {
+            console.warn(`Error parsing tools JSON: ${e.message}. Tools not updated.`);
+        }
+
+        // Update the compliance config
+        const updatedComplianceConfig = {
+            enabled: complianceInput.checked
+        };
+
+        // Update client config
+        if (client.updateChatConfig) {
+            client.updateChatConfig(updatedChatConfig);
+            currentChatConfig = { ...updatedChatConfig };
+            console.log("Chat configuration dynamically updated:", currentChatConfig);
+        } else {
+            console.warn("updateChatConfig method not available on client");
+        }
+        
+        // Update compliance separately if necessary
+        if (client.updateComplianceConfig) {
+            client.updateComplianceConfig(updatedComplianceConfig);
+            currentComplianceConfig = { ...updatedComplianceConfig };
+        } else {
+            console.warn("updateComplianceConfig method not available on client");
+        }
+        
+    } catch (error) {
+        console.error("Failed to update chat configuration:", error);
+    }
+}
+
 // Call the initialization function when the script loads
 initializeAndTest();
+
+// After initialization, add event listeners to form fields to update config dynamically
+// Wait for DOM to be fully loaded and client to be initialized
+document.addEventListener('DOMContentLoaded', () => {
+    // We'll add a small delay to ensure the client is initialized
+    setTimeout(() => {
+        if (!client) {
+            console.warn("Client not initialized, cannot set up dynamic config updates");
+            return;
+        }
+
+        // Add change event listeners to all config inputs
+        [
+            systemPromptInput,
+            historySizeInput,
+            maxTokensInput,
+            temperatureInput,
+            streamInput,
+            complianceInput,
+            reasoningInput,
+            toolsInput
+        ].forEach(input => {
+            if (input) {
+                const eventType = input.type === 'checkbox' ? 'change' : 'input';
+                input.addEventListener(eventType, updateChatConfig);
+            }
+        });
+
+        console.log("Dynamic configuration update handlers attached to form fields");
+    }, 500); // 500ms delay
+});
