@@ -1,3 +1,10 @@
+# [1.7.0](https://github.com/AnimusAILabs/animus-client/compare/v1.6.0...v1.7.0) (2025-05-20)
+
+
+### Features
+
+* Dynamically update config options ([fc3ae5e](https://github.com/AnimusAILabs/animus-client/commit/fc3ae5e586b30714f348c51241cccdb77c8dc376))
+
 # [1.6.0](https://github.com/AnimusAILabs/animus-client/compare/v1.5.0...v1.6.0) (2025-05-14)
 
 
