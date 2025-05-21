@@ -14,7 +14,7 @@ import {
 // ... other imports remain the same
 import { AuthHandler, AuthenticationError, LiveKitContext, LiveKitDetails } from './AuthHandler';
 import { RequestUtil, ApiError } from './RequestUtil';
-import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk, Tool } from './Chat'; // Import Tool
+import { ChatModule, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk, Tool, ChatMessage } from './Chat'; // Import Tool and ChatMessage
 import { MediaModule, MediaCompletionRequest, MediaCompletionResponse, MediaAnalysisRequest, MediaAnalysisResultResponse, MediaAnalysisStatusResponse } from './Media';
 
 // Re-export error types for convenience
@@ -153,6 +153,8 @@ export interface AnimusClientOptions {
 
 /** Identifies the source of a stream */
 export type StreamSource = 'observer' | 'http';
+
+// No more image generation events, they've been removed in favor of direct awaitable method calls
 
 // --- Observer Stream Event Definitions (NEW) ---
 
@@ -328,7 +330,9 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
         this.isObserverConnected.bind(this),
         this.sendObserverText.bind(this),
         // We still pass resetUserActivity for compatibility but it's simplified
-        this.resetUserActivity.bind(this) 
+        this.resetUserActivity.bind(this),
+        // Pass generateImage method to standardize image generation
+        this.generateImage.bind(this)
     );
     this.media = new MediaModule(
         this.requestUtil,
@@ -888,6 +892,67 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
           throw new ApiError(`Failed to send message via LiveKit Observer: ${error instanceof Error ? error.message : String(error)}`, 0, error);
       }
   }
+
+  /**
+   * Generates an image based on the provided prompt.
+   * Returns the URL of the generated image and adds it to chat history.
+   *
+   * @param prompt - The text prompt to generate an image from
+   * @returns A Promise resolving to the URL of the generated image
+   * @throws {ApiError} If the image generation fails
+   */
+  public async generateImage(prompt: string): Promise<string> {
+      if (!prompt || prompt.trim() === '') {
+          throw new Error('Image generation requires a non-empty prompt');
+      }
+
+      try {
+          // Make the request to generate the image
+          // We don't specify a specific response type to handle different formats
+          const response = await this.requestUtil.request(
+              'POST',
+              '/generate/image',
+              { prompt: prompt },
+              false
+          );
+
+          let imageUrl: string | null = null;
+
+          // Handle different response formats
+          if (response.output && Array.isArray(response.output) && response.output.length > 0) {
+              imageUrl = response.output[0];
+          } else if (response.output && typeof response.output === 'string') {
+              imageUrl = response.output;
+          } else if (response.outputs && Array.isArray(response.outputs) && response.outputs.length > 0) {
+              imageUrl = response.outputs[0];
+          }
+
+          // If no valid URL was found, throw an error
+          if (!imageUrl) {
+              console.error('[Animus SDK] Invalid image generation response format:', response);
+              throw new Error('No image URL found in server response');
+          }
+
+          console.log('[Animus SDK] Generated image URL:', imageUrl);
+          
+          // If the chat module is available, add the image to chat history
+          if (this.chat) {
+              // Add image message as an assistant response to history
+              this.chat.addAssistantResponseToHistory(
+                  `<img src='${imageUrl}' description='${prompt}' />`,
+                  null, // No compliance violations
+                  false // Not from observer
+              );
+          }
+          
+          return imageUrl;
+      } catch (error) {
+          console.error('[Animus SDK] Error generating image:', error);
+          throw error instanceof ApiError
+              ? error
+              : new ApiError(`Failed to generate image: ${error instanceof Error ? error.message : String(error)}`, 0, error);
+      }
+}
 }
 
 // Re-export types from their respective modules

@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Animus SDK Test (Tailwind)</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .assistant img {
+            max-width: 100%;
+            border-radius: 0.5rem;
+            margin-top: 0.5rem;
+        }
+    </style>
 </head>
 <body class="h-screen flex flex-col bg-gray-100"> <!-- Full height, column flex -->
     <h1 class="text-center text-2xl font-bold my-4 text-gray-700 shrink-0">Animus SDK Test Page (Tailwind)</h1>
@@ -153,6 +160,8 @@ Openness: 37 (Moderate)
 - NO quotation marks (") for emphasis or dialogue (unless quoting a specific short phrase someone *just* said, very rare).
 - NO bold, italics, bullet points, numbered lists, or any other text formatting/markdown.
 
+**When asked to generate or create an image, use the generate_image function call.**
+
 **Final Output Requirements:**
 - Deliver ONLY the final chat message text.</textarea>
             </div>
@@ -183,6 +192,10 @@ Openness: 37 (Moderate)
                     <input type="checkbox" id="reasoning-input" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"> <!-- Reasoning checkbox -->
                     <label for="reasoning-input" class="text-sm text-gray-700">Reasoning</label> <!-- Reasoning label -->
                 </div>
+                <div class="config-item checkbox-item flex flex-row items-center gap-1 pt-4"> <!-- Image generation checkbox -->
+                    <input type="checkbox" id="image-generation-input" class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <label for="image-generation-input" class="text-sm text-gray-700">Image Generation</label>
+                </div>
             </div>
 
             <!-- Tool Configuration -->
@@ -193,7 +206,7 @@ Openness: 37 (Moderate)
     "type": "function",
     "function": {
       "name": "generate_image",
-      "description": "Generates an image based on a user's query or description. Use this if the user explicitly asks to create or show an image.",
+      "description": "Generates an image based on a user's query or description. Use this whenever the user explicitly asks to create, generate, or show an image.",
       "parameters": {
         "type": "object",
         "properties": {

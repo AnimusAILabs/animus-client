@@ -50,6 +50,7 @@ export interface ChatCompletionRequest {
   min_p?: number;
   length_penalty?: number;
   compliance?: boolean;
+  check_image_generation?: boolean;
 }
 
 // --- Response Interfaces (remain the same) ---
@@ -60,6 +61,7 @@ interface ChatCompletionChoice {
     role: 'assistant';
     content: string | null; // Can be null if tool_calls are present
     tool_calls?: ToolCall[];
+    image_prompt?: string; // Prompt for generating an image
   };
   finish_reason: string; // e.g., 'stop', 'length', 'tool_calls'
   compliance_violations?: string[]; // Violations specific to this choice (for n > 1)
@@ -118,14 +120,18 @@ export class ChatModule {
   private sendObserverText: (text: string) => Promise<void>;
   private resetUserActivity?: () => void;
   
+  // Reference to the parent client's generateImage function
+  private generateImage?: (prompt: string) => Promise<string>;
+
   constructor(
       requestUtil: RequestUtil,
       chatOptions: AnimusChatOptions | undefined, // Receive the whole config object or undefined
       // Add observer functions to constructor
       isObserverConnected: () => boolean,
       sendObserverText: (text: string) => Promise<void>,
-      resetUserActivity?: () => void
-      // Removed eventEmitter parameter
+      resetUserActivity?: () => void,
+      // Add generateImage function from parent client
+      generateImage?: (prompt: string) => Promise<string>
   ) {
     this.requestUtil = requestUtil;
     this.config = chatOptions;
@@ -135,6 +141,7 @@ export class ChatModule {
     this.isObserverConnected = isObserverConnected;
     this.sendObserverText = sendObserverText;
     this.resetUserActivity = resetUserActivity;
+    this.generateImage = generateImage;
 
     // Set system message if config is provided
      if (this.config?.systemMessage) {
@@ -223,6 +230,9 @@ export class ChatModule {
         length_penalty: request.length_penalty ?? defaults.length_penalty,
         // Compliance defaults to true if not specified in request or config
         compliance: request.compliance ?? defaults.compliance ?? true,
+        
+        // Add check_image_generation parameter (just like other params)
+        check_image_generation: request.check_image_generation,
 
         // Tool calling parameters
         tools: request.tools ?? defaults.tools,
@@ -471,29 +481,41 @@ export class ChatModule {
         payload,
         false // Indicate non-streaming
       );
+      
       // --- Update History (Non-Streaming) ---
-     const historySize = this.config?.historySize ?? 0;
-     // Only update history if historySize > 0
-     if (historySize > 0) {
-         // Add the user message(s) from the original request
-         request.messages.forEach(msg => this.addMessageToHistory(msg));
-         // Add the assistant's response only if no compliance violations
-         const assistantMessage = response.choices?.[0]?.message;
-         const assistantMessageContent = response.choices?.[0]?.message?.content;
-         const assistantToolCalls = response.choices?.[0]?.message?.tool_calls;
+      const historySize = this.config?.historySize ?? 0;
+      // Only update history if historySize > 0
+      if (historySize > 0) {
+          // Add the user message(s) from the original request
+          request.messages.forEach(msg => this.addMessageToHistory(msg));
+          // Add the assistant's response only if no compliance violations
+          const assistantMessage = response.choices?.[0]?.message;
+          const assistantMessageContent = response.choices?.[0]?.message?.content;
+          const assistantToolCalls = response.choices?.[0]?.message?.tool_calls;
 
-         if (assistantMessageContent !== undefined || assistantToolCalls) {
-             // Use addAssistantResponseToHistory to handle cleaning/trimming and check compliance
-             this.addAssistantResponseToHistory(
-                 assistantMessageContent ?? null, // Pass null if content is undefined
-                 response.compliance_violations,
-                 false,
-                 assistantToolCalls
-             );
-         }
-         // Trimming is handled within addMessageToHistory
-     }
+          if (assistantMessageContent !== undefined || assistantToolCalls) {
+              // Use addAssistantResponseToHistory to handle cleaning/trimming and check compliance
+              this.addAssistantResponseToHistory(
+                  assistantMessageContent ?? null, // Pass null if content is undefined
+                  response.compliance_violations,
+                  false,
+                  assistantToolCalls
+              );
+          }
+          // Trimming is handled within addMessageToHistory
+      }
       // --- End History Update ---
+      
+      // Check if image generation is requested and if the response contains an image prompt
+      // Note: We now simply detect the image_prompt but don't automatically generate it
+      // The client will handle image generation directly when it detects image_prompt in the response
+      if (request.check_image_generation && response.choices?.[0]?.message?.image_prompt) {
+          const imagePrompt = response.choices[0].message.image_prompt;
+          console.log('[Animus SDK] Detected image prompt in response:', imagePrompt);
+          console.log('[Animus SDK] Image will be generated by client after receiving response');
+          // No longer automatically generating the image here
+      }
+      
       return response;
     }
   }
@@ -555,6 +577,8 @@ export class ChatModule {
           stream: options?.stream ?? defaults.stream ?? false,
           // Pass through tools from options if provided, else from config
           tools: requestOptions.tools ?? defaults.tools,
+          // Pass through check_image_generation
+          check_image_generation: requestOptions.check_image_generation,
           // tool_choice is set by `completions` method based on presence of tools
       };
       // Remove undefined values

@@ -213,6 +213,7 @@ const client = new AnimusClient({
     *   `length_penalty` (optional, `number`, default: 1): Adjusts impact of sequence length.
     *   `compliance` (optional, `boolean`, default: true): Enables content moderation (see **Content Compliance** section below).
     *   `reasoning` (optional, `boolean`, default: false): For non-streaming responses, this adds a `reasoning` field to the response message. For streaming, the thinking content will be included directly in the response stream.
+    *   `check_image_generation` (optional, `boolean`, default: false): When true, checks if the response contains an `image_prompt` and automatically generates an image (see **Image Generation** section below).
     *   `historySize` (optional, `number`, default: 0): Enables automatic chat history management (SDK feature).
 *   `vision` (optional, `AnimusVisionOptions`): If provided, enables vision features and sets defaults.
     *   `model` (**required** if `vision` provided, `string`): Default model for vision requests.
@@ -633,12 +634,73 @@ The `observerSessionEnded` event provides a `reason` for why proactive messaging
 
 ---
 
-### 7. Error Handling
+### 7. Image Generation
+
+The SDK provides support for generating images from text prompts. This can be triggered directly or through the chat completion response.
+
+#### a) Direct Image Generation (`client.generateImage`)
+
+Generate an image directly from a text prompt:
+
+```javascript
+// Generate an image from a prompt
+try {
+  const imageUrl = await client.generateImage("A serene mountain landscape at sunset");
+  console.log('Generated image URL:', imageUrl);
+} catch (error) {
+  console.error('Image generation failed:', error);
+}
+```
+
+The `generateImage` method:
+- Makes an API request to the image generation endpoint
+- Adds the image to chat history automatically
+- Returns the image URL directly
+
+#### b) Model-Suggested Image Generation via Chat
+
+When you set `check_image_generation: true`, the model can decide if an image should be generated based on the conversation. If it does decide to generate an image, the response will include an `image_prompt` field:
+
+```javascript
+const response = await client.chat.completions({
+  messages: [{ role: 'user', content: 'Create an image of a futuristic city' }],
+  check_image_generation: true // Allow the model to suggest image generation
+});
+
+// Check if the model suggested an image
+if (response.choices[0].message.image_prompt) {
+  const imagePrompt = response.choices[0].message.image_prompt;
+  console.log("Model suggested image prompt:", imagePrompt);
+  
+  // Generate the image using the provided prompt
+  const imageUrl = await client.generateImage(imagePrompt);
+  console.log("Generated image URL:", imageUrl);
+}
+```
+
+This two-step approach gives you full control over:
+1. When to generate images (you can check the prompt first)
+2. How to handle image generation errors
+3. When to display the image in your UI
+
+#### c) Image Response Format
+
+When an image is generated, it is added to the chat history as an assistant message with HTML content:
+
+```html
+<img src='https://image-url.example/generated-image.jpg' description='The image prompt text' />
+```
+
+This gives the AI the context of the image it generated and displayed to the user.
+
+---
+
+### 8. Error Handling
 
 The SDK throws specific error types:
 
 *   `AuthenticationError`: Issues related to fetching or validating the access token (e.g., invalid `tokenProviderUrl`, token expiry).
-*   `ApiError`: Errors returned directly from the Animus API (e.g., invalid request parameters, model errors). Includes `status` code and `errorData`.
+*   `ApiError`: Errors returned directly from the Animus API (e.g., invalid request parameters, model errors, image generation failures). Includes `status` code and `errorData`.
 *   Standard `Error`: For other issues like network problems or configuration errors.
 
 Use `try...catch` blocks and check the error type using `instanceof`.

@@ -12,6 +12,7 @@ const temperatureInput = document.getElementById('temperature-input');
 const streamInput = document.getElementById('stream-input');
 const complianceInput = document.getElementById('compliance-input');
 const reasoningInput = document.getElementById('reasoning-input');
+const imageGenerationInput = document.getElementById('image-generation-input');
 const toolsInput = document.getElementById('tools-input');
 
 // Observer UI Elements
@@ -186,7 +187,8 @@ async function initializeAndTest() {
         };
 
 
-        // --- Observer Connection Status Event Listeners (Keep these) ---
+        // --- Event Listeners for testing the SDK ---
+        logOutput('Setting up event listeners for AnimusClient...');
         client.on('observerConnecting', () => {
             logOutput('Observer connecting...');
             updateStatus('Connecting to Agent...');
@@ -317,14 +319,16 @@ async function initializeAndTest() {
             typingIndicatorElement.classList.remove('bg-gray-200', 'text-gray-800');
             typingIndicatorElement.classList.add('bg-gray-100', 'text-gray-500', 'italic');
 
-            // Determine if streaming and reasoning are enabled based on the checkboxes
+            // Determine if streaming, reasoning, and image generation are enabled based on checkboxes
             const isStreaming = streamInput.checked;
             const isReasoningEnabled = reasoningInput.checked;
+            const isImageGenerationEnabled = imageGenerationInput.checked;
             
             // Prepare message options
             const messageOptions = {
                 stream: isStreaming,
-                reasoning: isReasoningEnabled
+                reasoning: isReasoningEnabled,
+                check_image_generation: isImageGenerationEnabled // Based on checkbox
             };
             
             // Parse tools from UI to use for this message
@@ -402,7 +406,7 @@ async function initializeAndTest() {
                                     // Use requestAnimationFrame for smoother visual updates - no delay
                                     requestAnimationFrame(() => {
                                         // Update UI with new content immediately
-                                        if (accumulatedStreamToolCalls.length === 0) {
+                                        if (accumulatedStreamToolCalls.length === 0 && httpAssistantMessageElement) {
                                             httpAssistantMessageElement.textContent = accumulatedStreamContent;
                                         }
                                         chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
@@ -427,8 +431,10 @@ async function initializeAndTest() {
                                     
                                     // Update tool call display
                                     requestAnimationFrame(() => {
-                                        httpAssistantMessageElement.textContent = `Tool call(s) requested:\n${JSON.stringify(accumulatedStreamToolCalls, null, 2)}`;
-                                        httpAssistantMessageElement.classList.add('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
+                                        if (httpAssistantMessageElement) {
+                                            httpAssistantMessageElement.textContent = `Tool call(s) requested:\n${JSON.stringify(accumulatedStreamToolCalls, null, 2)}`;
+                                            httpAssistantMessageElement.classList.add('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
+                                        }
                                         chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
                                     });
                                 }
@@ -451,13 +457,21 @@ async function initializeAndTest() {
                     };
                     
                     // Start processing the stream with enhanced token visualization
-                    await processStreamWithVisibleTokens();
-                    logOutput("HTTP Stream finished.");
-                     if (streamFinishReason === 'tool_calls' && accumulatedStreamToolCalls.length > 0 && !accumulatedStreamContent) {
-                        // Already displayed by the loop
-                    } else if (!httpAssistantMessageElement && !accumulatedStreamContent && accumulatedStreamToolCalls.length === 0) {
-                        // If nothing was ever displayed (e.g. empty stream)
-                         addMessageToChat('assistant', '[Empty Response]');
+                    try {
+                        await processStreamWithVisibleTokens();
+                        logOutput("HTTP Stream finished.");
+                        if (streamFinishReason === 'tool_calls' && accumulatedStreamToolCalls.length > 0 && !accumulatedStreamContent) {
+                            // Already displayed by the loop
+                        } else if (!httpAssistantMessageElement && !accumulatedStreamContent && accumulatedStreamToolCalls.length === 0) {
+                            // If nothing was ever displayed (e.g. empty stream)
+                            addMessageToChat('assistant', '[Empty Response]');
+                        }
+                    } catch (streamError) {
+                        logOutput(`Error in stream processing: ${streamError.message}`, true);
+                        // Ensure we have a message element if it failed to create one
+                        if (!httpAssistantMessageElement) {
+                            httpAssistantMessageElement = addMessageToChat('assistant', '[Error processing response]');
+                        }
                     }
 
 
@@ -494,7 +508,17 @@ async function initializeAndTest() {
                         logOutput("No textual content or tool_calls in response.", response);
                     }
                     
-                    const assistantMsgElement = addMessageToChat('assistant', displayContent);
+                    // Handle HTML content (like images) differently
+                    const assistantMsgElement = displayContent.includes('<img')
+                        ? (() => {
+                            const el = document.createElement('div');
+                            el.classList.add('p-2', 'px-4', 'rounded-lg', 'self-start', 'bg-gray-200', 'text-gray-800', 'assistant', 'whitespace-pre-wrap', 'border-transparent');
+                            el.innerHTML = displayContent;
+                            chatWindow.appendChild(el);
+                            return el;
+                        })()
+                        : addMessageToChat('assistant', displayContent);
+                    
                     if (messageStyles.length > 0) {
                         assistantMsgElement.classList.add(...messageStyles);
                     }
@@ -511,6 +535,62 @@ async function initializeAndTest() {
                          assistantMsgElement.classList.add('border-2', 'border-red-500', 'opacity-75');
                          const violationBubble = addMessageToChat('assistant', `[Content Moderation: ${response.compliance_violations.join(', ')}]`);
                          violationBubble.classList.add('bg-red-100', 'text-red-700', 'italic');
+                    }
+
+                    // Check if the response contains an image prompt (from check_image_generation being true)
+                    if (message?.image_prompt) {
+                        const imagePrompt = message.image_prompt;
+                        logOutput(`Response contains image prompt: "${imagePrompt}". Generating image directly...`);
+                        
+                        // First make sure the text content of the message is displayed
+                        // This ensures the first issue is fixed - message content appears immediately before loading indicator
+                        
+                        // Create a placeholder for the upcoming image within the existing message
+                        const imagePlaceholder = document.createElement('div');
+                        imagePlaceholder.classList.add('mt-3', 'p-3', 'rounded', 'bg-yellow-100', 'text-yellow-800', 'border', 'border-yellow-200');
+                        imagePlaceholder.innerHTML = `
+                            <div class="flex items-center">
+                                <div class="animate-spin mr-2 h-4 w-4 border-2 border-yellow-800 rounded-full border-t-transparent"></div>
+                                <span>Generating image for: "${imagePrompt}"...</span>
+                            </div>
+                        `;
+                        
+                        // Add the placeholder to the existing assistant message
+                        assistantMsgElement.appendChild(imagePlaceholder);
+                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                        
+                        // Generate the image directly and update the UI when done
+                        (async () => {
+                            try {
+                                logOutput(`Calling client.generateImage("${imagePrompt}")`);
+                                const imageUrl = await client.generateImage(imagePrompt);
+                                logOutput(`Image generated successfully: ${imageUrl}`);
+                                
+                                // Replace the placeholder with the actual image
+                                imagePlaceholder.innerHTML = `
+                                    <div>
+                                        <img src="${imageUrl}" alt="Generated image for: ${imagePrompt}" class="rounded">
+                                        <div class="text-xs text-gray-500 mt-1">Generated from: "${imagePrompt}"</div>
+                                    </div>
+                                `;
+                                
+                                // Update styling
+                                imagePlaceholder.classList.remove('bg-yellow-100', 'text-yellow-800', 'border-yellow-200');
+                                imagePlaceholder.classList.add('bg-green-50', 'border-green-200');
+                                
+                                // Scroll to ensure the image is visible
+                                chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
+                            } catch (error) {
+                                logOutput(`Error generating image: ${error.message || error}`, true);
+                                imagePlaceholder.innerHTML = `
+                                    <div class="text-red-600">
+                                        Failed to generate image: ${error.message || 'Unknown error'}
+                                    </div>
+                                `;
+                                imagePlaceholder.classList.remove('bg-yellow-100', 'text-yellow-800', 'border-yellow-200');
+                                imagePlaceholder.classList.add('bg-red-50', 'border-red-200', 'text-red-700');
+                            }
+                        })();
                     }
 
                     updateStatus('Connected - Ready to Chat');
@@ -680,7 +760,7 @@ function updateChatConfig() {
             temperature: parseFloat(temperatureInput.value) || 0.7,
             stream: streamInput.checked,
             max_tokens: parseInt(maxTokensInput.value, 10) || 1024,
-            reasoning: reasoningInput.checked,
+            reasoning: reasoningInput.checked
         };
 
         // Parse tools if needed
@@ -745,6 +825,7 @@ document.addEventListener('DOMContentLoaded', () => {
             streamInput,
             complianceInput,
             reasoningInput,
+            imageGenerationInput,
             toolsInput
         ].forEach(input => {
             if (input) {
