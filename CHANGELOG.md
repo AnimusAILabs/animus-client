@@ -1,3 +1,10 @@
+# [1.8.0](https://github.com/AnimusAILabs/animus-client/compare/v1.7.0...v1.8.0) (2025-05-21)
+
+
+### Features
+
+* Adding dynamic image generation to chats ([1f9030b](https://github.com/AnimusAILabs/animus-client/commit/1f9030b21ae465ce8c344751534e1acfa2b52d7a))
+
 # [1.7.0](https://github.com/AnimusAILabs/animus-client/compare/v1.6.0...v1.7.0) (2025-05-20)
 
 
