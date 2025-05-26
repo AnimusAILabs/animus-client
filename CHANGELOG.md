@@ -1,3 +1,10 @@
+# [1.9.0](https://github.com/AnimusAILabs/animus-client/compare/v1.8.0...v1.9.0) (2025-05-26)
+
+
+### Features
+
+* Refactoring autoTurns BREAKING CHANGE: This new update replaces the old version ([9b7e66c](https://github.com/AnimusAILabs/animus-client/commit/9b7e66c448ddad39678972ccfbf0a8152adbf1d7))
+
 # [1.8.0](https://github.com/AnimusAILabs/animus-client/compare/v1.7.0...v1.8.0) (2025-05-21)
 
 
