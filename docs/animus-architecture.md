@@ -128,7 +128,6 @@ graph TD
     ServiceMode --> UseApi[useApi: Boolean]
     ServiceMode --> UseRealtime[useRealtime: Object]
 
-    UseRealtime --> Observer[observer: Boolean]
     UseRealtime --> Audio[audio: Boolean]
     UseRealtime --> Vision[vision: Boolean]
 
@@ -157,7 +156,6 @@ graph TD
     *   `useApi` (Boolean, Optional, Default: true): Determines if standard API calls (e.g., for non-realtime chat, data management) should be enabled and routed via Kong using the JWT.
     *   `useRealtime` (Object, Optional): Controls real-time capabilities via the Animus Realtime Server using the JWT.
         *   `enabled` (Boolean, Optional, Default: true if `useRealtime` object exists): Master switch for enabling WebSocket connection to the Animus Realtime Server.
-        *   `observer` (Boolean): Enables proactive messaging from the Animus Realtime Server.
         *   `audio` (Boolean): Enables STT/TTS capabilities, proxied through Animus Realtime Server to LiveKit.
         *   `vision` (Boolean): Enables visual input processing, proxied through Animus Realtime Server to LiveKit.
 
@@ -262,7 +260,6 @@ flowchart TD
         useApi: false, // Disable standard API path if not needed
         useRealtime: {
           enabled: true,
-          observer: true, // Allow proactive messages
           audio: false,
           vision: false
         }
@@ -281,7 +278,6 @@ flowchart TD
         useApi: true,
         useRealtime: {
           enabled: true,
-          observer: true,
           audio: true,
           vision: true // Assuming vision uses LiveKit via RTS
         }

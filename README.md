@@ -17,6 +17,12 @@ This SDK simplifies authentication and provides convenient methods for accessing
 *   Configurable token storage (`sessionStorage` or `localStorage`).
 *   Optional real-time communication via LiveKit Observer for low-latency streaming.
 *   Automatic extraction of `<think>...</think>` blocks from assistant messages into a `reasoning` field for cleaner history and UI flexibility.
+*   **Conversational Turns**: Natural conversation flow with automatic response splitting and realistic typing delays.
+*   **Advanced Conversational Turns Configuration**: Granular control over split probability, typing speeds, delays, and sentence thresholds.
+*   **Automatic Image Generation**: Seamless image generation when responses contain image prompts, with comprehensive event feedback.
+*   **Smart Follow-Up Requests**: Automatic continuation of conversations when the AI indicates more content is expected.
+*   **Event-Driven Architecture**: Comprehensive events for all operations including turns, image generation, and message processing.
+*   **Robust Message History**: Complete conversation context preservation, including messages with compliance violations for better AI context.
 
 ## Installation
 
@@ -97,6 +103,73 @@ async function main() {
     } catch (error) {
       console.error('\nStream error:', error);
     }
+
+    // --- Example: Conversational Turns ---
+    // Enable natural conversation flow with automatic response splitting
+    const clientWithAutoTurn = new AnimusClient({
+      tokenProviderUrl: tokenProviderUrl,
+      chat: {
+        model: 'vivian-llama3.1-70b-1.0-fp8',
+        systemMessage: 'You are a helpful assistant.',
+        autoTurn: true // Simple enable - uses default settings
+      }
+    });
+
+    // --- Example: Advanced Conversational Turns Configuration ---
+    const clientWithAdvancedAutoTurn = new AnimusClient({
+      tokenProviderUrl: tokenProviderUrl,
+      chat: {
+        model: 'vivian-llama3.1-70b-1.0-fp8',
+        systemMessage: 'You are a helpful assistant.',
+        autoTurn: {
+          enabled: true,
+          splitProbability: 0.8,        // 80% chance to split multi-sentence responses
+          shortSentenceThreshold: 25,   // Group sentences shorter than 25 chars
+          baseTypingSpeed: 50,          // 50 WPM base typing speed
+          speedVariation: 0.3,          // ±30% speed variation
+          minDelay: 800,                // Minimum 800ms delay between turns
+          maxDelay: 2500                // Maximum 2.5s delay between turns
+        }
+      }
+    });
+
+    // Listen for unified message events
+    clientWithAutoTurn.on('messageStart', (data) => {
+      console.log(`Starting ${data.messageType} message: ${data.content}`);
+      if (data.messageType === 'auto' && data.turnIndex !== undefined) {
+        console.log(`Turn ${data.turnIndex + 1}/${data.totalTurns}`);
+      }
+    });
+
+    clientWithAutoTurn.on('messageComplete', (data) => {
+      console.log(`Completed ${data.messageType || 'regular'} message: ${data.content}`);
+      if (data.messageType === 'auto' && data.turnIndex !== undefined) {
+        console.log(`Turn ${data.turnIndex + 1}/${data.totalTurns} complete`);
+      }
+      if (data.totalMessages) {
+        console.log(`All ${data.totalMessages} messages completed`);
+      }
+    });
+
+    clientWithAutoTurn.on('messageError', (data) => {
+      console.error(`${data.messageType || 'regular'} message error: ${data.error}`);
+    });
+
+    // Image generation events
+    clientWithAutoTurn.on('imageGenerationStart', (data) => {
+      console.log(`Starting image generation: ${data.prompt}`);
+    });
+
+    clientWithAutoTurn.on('imageGenerationComplete', (data) => {
+      console.log(`Image generated: ${data.imageUrl}`);
+    });
+
+    clientWithAutoTurn.on('imageGenerationError', (data) => {
+      console.error(`Image generation failed: ${data.error}`);
+    });
+
+    // Send message - may be split into multiple turns with natural delays
+    await clientWithAutoTurn.chat.send("Tell me about renewable energy sources and their benefits.");
 
 
     // --- Example: Media Analysis (Image) ---
@@ -179,10 +252,6 @@ const client = new AnimusClient({
     // temperature: 0.2 // Optional vision default
   },
 
-  // Optional: Configure Observer connection
-  observer: {
-      enabled: true // Set to true to enable Observer feature
-  },
 
   // Optional: Other top-level settings
   // apiBaseUrl: 'https://api.animusai.co/v3',
@@ -215,15 +284,12 @@ const client = new AnimusClient({
     *   `reasoning` (optional, `boolean`, default: false): For non-streaming responses, this adds a `reasoning` field to the response message. For streaming, the thinking content will be included directly in the response stream.
     *   `check_image_generation` (optional, `boolean`, default: false): When true, checks if the response contains an `image_prompt` and automatically generates an image (see **Image Generation** section below).
     *   `historySize` (optional, `number`, default: 0): Enables automatic chat history management (SDK feature).
+    *   `autoTurn` (optional, `boolean | ConversationalTurnsConfig`, default: false): Enables conversational turns with natural response splitting and typing delays.
+        *   Simple usage: `autoTurn: true` (uses default settings)
+        *   Advanced usage: `autoTurn: { enabled: true, splitProbability: 0.8, ... }` (see **Conversational Turns Configuration** below)
 *   `vision` (optional, `AnimusVisionOptions`): If provided, enables vision features and sets defaults.
     *   `model` (**required** if `vision` provided, `string`): Default model for vision requests.
     *   `temperature` (optional, `number`): Default temperature for vision *completion* requests.
-*   `observer` (optional, `AnimusObserverOptions`): Configures the LiveKit Observer connection for real-time communication.
-    *   `enabled` (**required** if `observer` provided, `boolean`): Set to `true` to enable the observer feature.
-    *   The following parameters configure the observer agent's behavior and are sent to the backend (all values optional):
-      * `initial_inactivity_delay` (optional, `number`, default: 120): Seconds before the first inactivity check.
-      * `backoff_multiplier` (optional, `number`, default: 1.5): Multiplier for increasing the delay between subsequent inactivity checks.
-      * `max_inactivity_messages` (optional, `number`, default: 2): Maximum number of inactivity messages to send during a period of user inactivity.
 
 ---
 
@@ -235,13 +301,23 @@ Interact with chat models. Accessed via `client.chat`. Requires `chat` options t
 
 ```typescript
 interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string; // The displayable content of the message
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null; // The displayable content of the message (can be null for tool_calls)
   name?: string;
   reasoning?: string; // Content extracted from the first <think>...</think> block (if any)
+  timestamp?: string; // ISO timestamp when message was created
+  tool_calls?: ToolCall[]; // For assistant messages requesting a tool call
+  tool_call_id?: string; // For tool messages responding to a tool call
+  compliance_violations?: string[]; // Track compliance violations for context
+  // Group metadata for conversational turns (internal use)
+  groupId?: string;
+  messageIndex?: number;
+  totalInGroup?: number;
 }
 ```
 *   **Note on `reasoning`:** If an assistant message contains `<think>...</think>` tags, the SDK automatically extracts the content of the *first* block into the `reasoning` field and removes the block (including tags) from the `content` field before storing it in history. This `reasoning` field is *not* sent back to the API in subsequent requests, helping to manage context window size.
+*   **Note on `compliance_violations`:** Messages with compliance violations are preserved in history with violation metadata to maintain conversation context. Individual clients can decide how to handle these messages in their UI.
+*   **Note on group metadata:** The `groupId`, `messageIndex`, and `totalInGroup` fields are used internally by conversational turns to track message relationships and are automatically managed by the SDK.
 
 **a) Simple Send (`client.chat.send`)**
 
@@ -252,23 +328,17 @@ import { ApiError, AuthenticationError } from 'animus-client';
 
 // Assumes client was initialized with chat options (model, systemMessage)
 try {
-  // If Observer is connected, this returns void and response comes via observer events.
-  // If Observer is NOT connected, this returns the ChatCompletionResponse directly.
   const response = await client.chat.send(
     "Tell me about the Animus Client SDK.",
-    { // Optional overrides for this specific request (used only in HTTP fallback)
+    { // Optional overrides for this specific request
       temperature: 0.8,
       reasoning: true, // Enable reasoning to see the model's thinking process
       // model: 'specific-model-override' // Can override model here too
     }
   );
 
-  if (response) { // Handle the direct HTTP response if Observer wasn't connected
-      console.log("AI (HTTP Fallback):", response.choices[0].message.content);
-      // Check compliance violations if needed: response.compliance_violations
-  } else {
-      console.log("Message sent via Observer. Waiting for stream events...");
-  }
+  console.log("AI Response:", response.choices[0].message.content);
+  // Check compliance violations if needed: response.compliance_violations
 
 } catch (error) {
   // Handle errors (see Error Handling section)
@@ -276,7 +346,6 @@ try {
   else console.error("Error:", error);
 }
 ```
-*   **Behavior:** If the LiveKit Observer is enabled and connected (see Section 5), `send()` routes the message via the observer, returns `undefined` immediately, and the response arrives via observer events like `observerComplete`. If the observer is not connected, `send()` falls back to a standard non-streaming HTTP request and returns the `ChatCompletionResponse`.
 
 **b) Full Completions (`client.chat.completions`)**
 
@@ -366,7 +435,7 @@ The Animus API integrates content moderation via the `compliance` parameter.
 *   **Disabling:** Set `compliance: false`.
 *   **Response:** When enabled and violations are detected in **non-streaming** responses, the `ChatCompletionResponse` will include a `compliance_violations` field (e.g., `["drug_use", "gore"]`).
 *   **Streaming:** Content moderation (`compliance: true`) is **not supported for streaming requests** (HTTP or Observer). The `compliance` flag is ignored, and no `compliance_violations` will be returned via `streamChunk` or `streamComplete` events.
-*   **History:** Responses with compliance violations (from non-streaming requests) are automatically **not** added to the internal conversation history.
+*   **History:** Responses with compliance violations are **added to the internal conversation history** with violation metadata to maintain conversation context for the AI. Individual clients can decide how to handle these messages in their UI.
 
 #### Non-streaming Compliance Detection
 
@@ -397,7 +466,114 @@ if (responseComp.compliance_violations && responseComp.compliance_violations.len
 
 ---
 
-### 4. Media / Vision (`client.media`)
+### 4. Conversational Turns Configuration
+
+The SDK provides advanced conversational turns functionality that creates natural conversation flow by automatically splitting long responses into multiple messages with realistic typing delays.
+
+#### Basic Usage
+
+```typescript
+// Simple enable - uses default settings
+const client = new AnimusClient({
+  tokenProviderUrl: 'your-token-url',
+  chat: {
+    model: 'your-model',
+    systemMessage: 'You are a helpful assistant.',
+    autoTurn: true // Enable with defaults
+  }
+});
+```
+
+#### Advanced Configuration
+
+```typescript
+// Advanced configuration with custom settings
+const client = new AnimusClient({
+  tokenProviderUrl: 'your-token-url',
+  chat: {
+    model: 'your-model',
+    systemMessage: 'You are a helpful assistant.',
+    autoTurn: {
+      enabled: true,                    // Enable conversational turns
+      splitProbability: 0.8,           // 80% chance to split multi-sentence responses
+      shortSentenceThreshold: 25,      // Group sentences shorter than 25 characters
+      baseTypingSpeed: 50,             // Base typing speed in WPM (words per minute)
+      speedVariation: 0.3,             // ±30% speed variation for natural feel
+      minDelay: 800,                   // Minimum delay between turns (ms)
+      maxDelay: 2500                   // Maximum delay between turns (ms)
+    }
+  }
+});
+```
+
+#### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Enable/disable conversational turns |
+| `splitProbability` | `number` | `1.0` | Probability (0-1) of splitting multi-sentence responses |
+| `shortSentenceThreshold` | `number` | `30` | Character threshold for grouping short sentences |
+| `baseTypingSpeed` | `number` | `45` | Base typing speed in words per minute |
+| `speedVariation` | `number` | `0.2` | Speed variation factor (±percentage) |
+| `minDelay` | `number` | `500` | Minimum delay between turns in milliseconds |
+| `maxDelay` | `number` | `3000` | Maximum delay between turns in milliseconds |
+
+#### Events
+
+The SDK emits comprehensive events for conversational turns:
+
+```typescript
+// Turn-specific events
+client.on('conversationalTurnStart', (data) => {
+  console.log(`Starting turn ${data.turnIndex + 1}/${data.totalTurns}`);
+  console.log(`Content: ${data.content}`);
+});
+
+client.on('conversationalTurnComplete', (data) => {
+  console.log(`Completed turn ${data.turnIndex + 1}/${data.totalTurns}`);
+});
+
+client.on('conversationalTurnsComplete', () => {
+  console.log('All conversational turns completed');
+});
+
+client.on('conversationalTurnsCanceled', (data) => {
+  console.log(`Canceled ${data.canceledTurns} pending turns`);
+});
+
+// Image generation events (when responses include image prompts)
+client.on('imageGenerationStart', (data) => {
+  console.log(`Starting image generation: ${data.prompt}`);
+});
+
+client.on('imageGenerationComplete', (data) => {
+  console.log(`Image generated: ${data.imageUrl}`);
+});
+
+client.on('imageGenerationError', (data) => {
+  console.error(`Image generation failed: ${data.error}`);
+});
+```
+
+#### How It Works
+
+1. **Response Analysis**: When a response is received, it's analyzed for sentence boundaries
+2. **Smart Splitting**: Based on `splitProbability`, multi-sentence responses may be split
+3. **Sentence Grouping**: Short sentences (below `shortSentenceThreshold`) are grouped together
+4. **Delay Calculation**: Realistic typing delays are calculated based on content length and typing speed
+5. **Sequential Delivery**: Messages are delivered with natural delays, creating conversational flow
+6. **Coordination**: Image generation and follow-up requests are properly coordinated with turn completion
+
+#### Best Practices
+
+- **splitProbability**: Use 0.7-1.0 for natural conversation, lower values for more cohesive responses
+- **baseTypingSpeed**: 40-60 WPM feels natural for most users
+- **speedVariation**: 0.2-0.4 adds realistic human-like variation
+- **Delays**: Keep minDelay ≥ 500ms and maxDelay ≤ 4000ms for good UX
+
+---
+
+### 5. Media / Vision (`client.media`)
 
 Interact with vision models. Accessed via `client.media`. Requires `vision` options (with `model`) to be configured during client initialization to use configured defaults.
 
@@ -458,7 +634,7 @@ console.log(`Job ${jobId} Status: ${status.status}, Progress: ${status.percent_c
 
 ### 5. Authentication (`client.clearAuthToken`)
 
-Manually clear the stored authentication token. Also disconnects the observer if connected.
+Manually clear the stored authentication token.
 
 ```typescript
 client.clearAuthToken();
@@ -466,38 +642,9 @@ client.clearAuthToken();
 
 ---
 
-### 6. LiveKit Observer & Unified Streaming Events
+### 6. Streaming Implementation
 
-The SDK includes optional support for real-time, low-latency communication with compatible Animus agents using LiveKit. When enabled, the SDK attempts to route chat messages (`client.chat.send`) via this connection.
-
-**a) Enabling the Observer**
-
-Provide the `observer` configuration object with `enabled: true` during client initialization:
-
-```typescript
-const client = new AnimusClient({
-  tokenProviderUrl: '...',
-  chat: { /* ... */ },
-  observer: {
-    enabled: true // Enable the observer feature
-  }
-  // ... other options
-});
-```
-
-After each AI assistant response, the SDK automatically sends the conversation history to the observer agent, which may decide to send proactive messages to re-engage inactive users.
-
-**b) Connection Management**
-
-The SDK manages the LiveKit connection lifecycle internally when `observer.enabled` is `true`. You **must manually initiate** the connection after creating the client:
-
-*   **Manual Connection:** `await client.connectObserverManually();`
-*   **Manual Disconnection:** `await client.disconnectObserverManually();`
-*   **Connection Status Events:** Listen for `observerConnecting`, `observerConnected`, `observerDisconnected`, `observerReconnecting`, `observerReconnected`, and `observerError` events on the `client` instance to track the connection state.
-
-**c) Streaming Implementation**
-
-For HTTP streaming responses, the SDK now uses the **AsyncIterable** pattern instead of events:
+For HTTP streaming responses, the SDK uses the **AsyncIterable** pattern:
 
 ```typescript
 // Using AsyncIterable pattern for streaming
@@ -528,109 +675,7 @@ try {
   // Handle any streaming errors
   console.error('Stream error:', error);
 }
-
-// --- Observer Events ---
-
-// Import the observer event data types
-import {
-  ObserverChunkData,
-  ObserverCompleteData,
-  ObserverErrorData,
-  ObserverSessionEndedData
-} from 'animus-client';
-
-// The observer uses a different set of events
-// Each event type has its own data structure
-
-// ObserverChunkData is emitted during streaming from the observer
-client.on('observerChunk', (data: ObserverChunkData) => {
-  // data contains:
-  // - participantIdentity: string - ID of the participant sending the chunk
-  // - chunk: ChatCompletionChunk - The raw chunk object
-  // - deltaContent?: string - Content delta from the chunk (if any)
-  // - compliance_violations?: string[] | null - Any compliance violations
-  
-  console.log(`Chunk from ${data.participantIdentity}:`, data.deltaContent);
-});
-
-// ObserverCompleteData is emitted when observer message is complete
-client.on('observerComplete', (data: ObserverCompleteData) => {
-  // data contains:
-  // - participantIdentity: string - ID of the participant
-  // - fullContent: string - Final content of the message
-  // - usage?: {...} | null - Usage statistics if available
-  // - compliance_violations?: string[] | null - Final compliance violations
-  // - observer_metadata?: any - Observer metadata with decision information
-  // - rawContent?: string - Original message content before processing
-  
-  console.log('Observer message:', data.fullContent);
-  
-  // Check if this is a proactive message
-  if (data.observer_metadata?.is_proactive) {
-    console.log('Received proactive message from observer agent');
-  }
-});
-
-// ObserverErrorData is emitted when an error occurs with the observer
-client.on('observerStreamError', (data: ObserverErrorData) => {
-  // data contains:
-  // - participantIdentity: string - ID of the participant
-  // - error: string - The error message
-  
-  console.error('Observer error:', data.error);
-});
-
-// ObserverSessionEndedData is emitted when observer signals end of proactive messaging
-client.on('observerSessionEnded', (data: ObserverSessionEndedData) => {
-  // data contains:
-  // - participantIdentity: string - ID of the participant
-  // - reason: 'max_messages_reached' | 'session_ended' - Reason for ending
-  
-  console.log(`Observer session ended. Reason: ${data.reason}`);
-});
 ```
-
-**d) Sending Messages via `client.chat.send()`**
-
-When the observer is enabled and connected, `client.chat.send(messageContent)`:
-1.  Constructs the payload (system message, history, user message).
-2.  Sends it via the LiveKit data channel.
-3.  Returns `undefined` immediately.
-4.  The response arrives via observer events such as `observerComplete`.
-
-If the observer is *not* connected, `client.chat.send()` falls back to a standard non-streaming HTTP API request and returns the `ChatCompletionResponse` directly.
-
-**e) Observer Proactive Messaging**
-
-The observer agent analyzes the conversation history after each AI assistant response and may send proactive messages when:
-1. It detects user inactivity
-2. There are unresolved questions in the conversation
-3. The interaction could benefit from additional engagement
-
-These proactive messages are delivered through the unified streaming events with special metadata:
-```typescript
-client.on('observerComplete', (data) => {
-  // Check if this is a proactive message from the observer
-  if (data.observer_metadata?.is_proactive) {
-    console.log('Observer proactive message:', data.fullContent);
-    // Handle the proactive message in your UI
-  }
-});
-
-client.on('observerSessionEnded', (data: ObserverSessionEndedData) => {
-  console.log(`Observer session ended. Reason: ${data.reason}`);
-  // Update UI to inform the user that proactive messages will no longer be sent.
-});
-```
-
-Proactive messages include helpful metadata in the `observer_metadata` object:
-- `is_proactive`: Boolean flag indicating this is a proactive message
-- `observer_analysis`: The analysis of the conversation that led to this proactive message
-- `observer_message`: The message crafted specifically for this engagement scenario
-
-The `observerSessionEnded` event provides a `reason` for why proactive messaging was stopped:
-- `max_messages_reached`: The configured limit for proactive messages was hit.
-- `session_ended`: The observer agent detected that the conversation naturally concluded.
 
 ---
 

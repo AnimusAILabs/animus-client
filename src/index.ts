@@ -4,14 +4,7 @@ export { AnimusClient } from './AnimusClient';
 // Configuration and Error Types
 export type {
   AnimusClientOptions,
-  AnimusClientEventMap,
-  // Observer-specific event data interfaces
-  ObserverChunkData,
-  ObserverCompleteData,
-  ObserverErrorData,
-  ObserverSessionEndedData,
-  // Stream Source type
-  StreamSource
+  AnimusClientEventMap
 } from './AnimusClient';
 export { AuthenticationError, ApiError } from './AnimusClient'; // Re-exported from AnimusClient
 
@@ -24,6 +17,29 @@ export type {
   Tool,
   ToolCall
 } from './Chat';
+
+// Conversational Turns Types
+export type {
+  ConversationalTurnsConfig,
+  SplitMessage,
+  QueuedMessage,
+  MessageEventData,
+  MessageCompleteData,
+  MessageErrorData,
+  GroupMetadata,
+  MessageCallback,
+  EventEmitter
+} from './conversational-turns';
+
+export {
+  ConversationalTurnsManager,
+  ResponseSplitter,
+  MessageQueue,
+  ConversationalTurnsConfigValidator,
+  DEFAULT_CONVERSATIONAL_TURNS_CONFIG,
+  SentenceExtractor,
+  DelayCalculator
+} from './conversational-turns';
 
 // Media Module Types
 export type {

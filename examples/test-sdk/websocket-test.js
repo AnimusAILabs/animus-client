@@ -55,11 +55,11 @@ async function testLiveKitWebSocketWithSdk() {
         // No chat/vision config needed for this test
     });
 
-    updateOutput(`Attempting to fetch LiveKit 'observer' details via SDK client...`);
-    // Use the SDK client to get LiveKit details for the 'observer' context
-    const livekitDetails = await client.getLiveKitDetails('observer'); // Fetch { url, token }
+    updateOutput(`Attempting to fetch LiveKit 'voice' details via SDK client...`);
+    // Use the SDK client to get LiveKit details for the 'voice' context
+    const livekitDetails = await client.getLiveKitDetails('voice'); // Fetch { url, token }
 
-    updateOutput(`LiveKit 'observer' details obtained. URL: ${livekitDetails.url}`);
+    updateOutput(`LiveKit 'voice' details obtained. URL: ${livekitDetails.url}`);
 
     // --- LiveKit Connection using livekit-client SDK ---
     updateOutput('Creating LiveKit Room instance...');

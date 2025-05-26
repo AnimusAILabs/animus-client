@@ -13,22 +13,24 @@ const streamInput = document.getElementById('stream-input');
 const complianceInput = document.getElementById('compliance-input');
 const reasoningInput = document.getElementById('reasoning-input');
 const imageGenerationInput = document.getElementById('image-generation-input');
+const autoTurnInput = document.getElementById('auto-turn-input');
 const toolsInput = document.getElementById('tools-input');
 
-// Observer UI Elements
-const observerConnectButton = document.getElementById('observer-connect-button');
-const observerDisconnectButton = document.getElementById('observer-disconnect-button');
-const updateObserverConfigButton = document.getElementById('update-observer-config-button');
-// Ensure these are the new IDs from the updated HTML
-const initialInactivityDelayInput = document.getElementById('initialInactivityDelayInput');
-const backoffMultiplierInput = document.getElementById('backoffMultiplierInput');
-const maxInactivityMessagesInput = document.getElementById('maxInactivityMessagesInput');
+// Conversational Turns Advanced Settings Elements
+const toggleTurnsSettingsButton = document.getElementById('toggle-turns-settings');
+const turnsSettingsContent = document.getElementById('turns-settings-content');
+const toggleTurnsText = document.getElementById('toggle-turns-text');
+const splitProbabilityInput = document.getElementById('split-probability-input');
+const shortSentenceThresholdInput = document.getElementById('short-sentence-threshold-input');
+const baseTypingSpeedInput = document.getElementById('base-typing-speed-input');
+const speedVariationInput = document.getElementById('speed-variation-input');
+const minDelayInput = document.getElementById('min-delay-input');
+const maxDelayInput = document.getElementById('max-delay-input');
 
 // Global client instance and its current config
 let client = null;
 let currentChatConfig = {}; // Store the active chat config
 let currentComplianceConfig = {}; // Store the active compliance config (example)
-let currentObserverConfig = {}; // Store the active observer config
 
 // Simple log to console
 function logOutput(message, isError = false) {
@@ -65,15 +67,6 @@ function updateConnectionButtons(state) {
     if (disconnectButton) {
         disconnectButton.disabled = isDisconnected || isConnecting;
     }
-    
-    // Also update the observer-specific buttons
-    if (observerConnectButton) {
-        observerConnectButton.disabled = isConnected || isConnecting;
-    }
-    
-    if (observerDisconnectButton) {
-        observerDisconnectButton.disabled = isDisconnected || isConnecting;
-    }
 }
 
 // Updated to use Tailwind classes
@@ -95,6 +88,43 @@ function addMessageToChat(role, text) {
     return messageElement; // Return for streaming updates
 }
 
+// Helper functions for conversational turns
+function addMessage(role, text, reasoning = null, messageType = null) {
+    const messageElement = addMessageToChat(role, text);
+    
+    // Add special styling for different message types
+    if (messageType === 'turn-indicator') {
+        messageElement.classList.remove('bg-gray-200', 'text-gray-800');
+        messageElement.classList.add('bg-blue-100', 'text-blue-600', 'italic', 'border-blue-300');
+        messageElement.dataset.turnIndicator = 'true';
+    } else if (messageType === 'turn-canceled') {
+        messageElement.classList.remove('bg-gray-200', 'text-gray-800');
+        messageElement.classList.add('bg-red-100', 'text-red-600', 'italic', 'border-red-300');
+    }
+    
+    // Handle reasoning if present
+    if (reasoning) {
+        const reasoningElement = document.createElement('div');
+        reasoningElement.classList.add('mt-2', 'p-2', 'bg-gray-100', 'rounded', 'text-sm', 'text-gray-600', 'italic');
+        reasoningElement.textContent = `Reasoning: ${reasoning}`;
+        messageElement.appendChild(reasoningElement);
+    }
+    
+    return messageElement;
+}
+
+function removeLastTurnIndicator() {
+    const turnIndicators = chatWindow.querySelectorAll('[data-turn-indicator="true"]');
+    if (turnIndicators.length > 0) {
+        const lastIndicator = turnIndicators[turnIndicators.length - 1];
+        lastIndicator.remove();
+    }
+}
+
+function removeAllTurnIndicators() {
+    const turnIndicators = chatWindow.querySelectorAll('[data-turn-indicator="true"]');
+    turnIndicators.forEach(indicator => indicator.remove());
+}
 
 function setInputEnabled(enabled, statusMessage = null) {
     // Check if elements exist before trying to use them
@@ -132,6 +162,16 @@ async function initializeAndTest() {
 
     try {
         // --- Read initial config FROM the form elements ---
+        const initialConversationalTurnsConfig = {
+            enabled: autoTurnInput.checked,
+            splitProbability: parseFloat(splitProbabilityInput.value) || 1.0,
+            shortSentenceThreshold: parseInt(shortSentenceThresholdInput.value, 10) || 30,
+            baseTypingSpeed: parseInt(baseTypingSpeedInput.value, 10) || 45,
+            speedVariation: parseFloat(speedVariationInput.value) || 0.2,
+            minDelay: parseInt(minDelayInput.value, 10) || 500,
+            maxDelay: parseInt(maxDelayInput.value, 10) || 3000
+        };
+
         const initialChatOptions = {
             model: 'animafmngvy7-xavier-r1',
             systemMessage: systemPromptInput.value,
@@ -140,7 +180,9 @@ async function initializeAndTest() {
             stream: streamInput.checked, // Read stream preference
             maxTokens: parseInt(maxTokensInput.value, 10) || 1024,
             reasoning: reasoningInput.checked, // Read reasoning preference
-            tools: undefined // Placeholder, will be set below
+            tools: undefined, // Placeholder, will be set below
+            // Use object configuration for autoTurn to include detailed settings
+            autoTurn: autoTurnInput.checked ? initialConversationalTurnsConfig : false
         };
 
         // Parse tools
@@ -166,12 +208,6 @@ async function initializeAndTest() {
             apiBaseUrl: 'https://api-dev.animusai.co/v3',
             tokenProviderUrl: tokenProviderUrl,
             chat: initialChatOptions,
-            observer: {
-                enabled: true, // Keep observer enabled by default for this example
-                initial_inactivity_delay: parseInt(initialInactivityDelayInput.value, 10) || 120,
-                backoff_multiplier: parseFloat(backoffMultiplierInput.value) || 1.5,
-                max_inactivity_messages: parseInt(maxInactivityMessagesInput.value, 10) || 2
-            },
             compliance: initialComplianceOptions
         });
         logOutput('Client initialized using form defaults. Setting up listeners...');
@@ -179,115 +215,203 @@ async function initializeAndTest() {
         // --- Store the successfully used initial config ---
         currentChatConfig = { ...initialChatOptions };
         currentComplianceConfig = { ...initialComplianceOptions };
-        currentObserverConfig = {
-            enabled: true,
-            initial_inactivity_delay: parseInt(initialInactivityDelayInput.value, 10) || 120,
-            backoff_multiplier: parseFloat(backoffMultiplierInput.value) || 1.5,
-            max_inactivity_messages: parseInt(maxInactivityMessagesInput.value, 10) || 2
-        };
 
 
         // --- Event Listeners for testing the SDK ---
         logOutput('Setting up event listeners for AnimusClient...');
-        client.on('observerConnecting', () => {
-            logOutput('Observer connecting...');
-            updateStatus('Connecting to Agent...');
-            updateConnectionButtons('connecting');
-        });
-        client.on('observerConnected', () => {
-            logOutput('Observer connected!');
-            updateStatus('Connected - Ready to Chat');
-            setInputEnabled(true);
-            updateConnectionButtons('connected');
-        });
-        client.on('observerDisconnected', (reason) => {
-            const msg = `Disconnected: ${reason || 'Unknown reason'}`;
-            logOutput(msg, true);
-            updateStatus(msg, reason && reason !== 'User disconnected');
-            setInputEnabled(true);
-            updateConnectionButtons('disconnected');
-        });
-         client.on('observerReconnecting', () => {
-            logOutput('Observer reconnecting...');
-            updateStatus('Reconnecting...');
-            updateConnectionButtons('reconnecting');
-        });
-        client.on('observerReconnected', () => {
-            logOutput('Observer reconnected!');
-            updateStatus('Reconnected - Ready to Chat');
-            setInputEnabled(true);
-            updateConnectionButtons('connected');
-        });
-        client.on('observerError', (errorMsg) => { // Listener name matches definition
-            const msg = `Connection Error: ${errorMsg}`;
-            logOutput(msg, true);
-            updateStatus(msg, true);
-            // Let disconnect handler manage button state if error causes disconnect
-        });
 
-        // --- Observer Stream Event Listeners (NEW - Handle proactive observer responses) ---
-        let observerAssistantMessageElement = null; // Track the OBSERVER's message bubble
-
-        // Note: Despite the event names referencing "chunks", the observer sends complete messages
+        // --- Unified Message Event Listeners ---
+        // All message types (regular, auto-turn, follow-up) use the same events
         
-        client.on('observerChunk', (data) => {
-            // We might get partial data here, but generally shouldn't rely on this event
-            // as the observer now sends complete messages in the observerComplete event
-            logOutput(`Received partial observer data (${data.participantIdentity}):`, data);
+        // --- Image Generation Events ---
+        client.on('imageGenerationStart', (data) => {
+            logOutput(`🎨 Image generation started: "${data.prompt}"`);
             
-            // We don't create UI elements here since we'll get the complete message in observerComplete
+            // Add a visual indicator in the chat
+            const imageIndicator = addMessage('assistant', 'Generating image...');
+            imageIndicator.dataset.imagePrompt = data.prompt;
+            imageIndicator.dataset.imageIndicator = 'true';
         });
-
-        client.on('observerComplete', (data) => {
-            // This event contains the complete message from the observer
-            logOutput(`Received observer message (${data.participantIdentity}):`, data);
+        
+        client.on('imageGenerationComplete', (data) => {
+            logOutput(`✅ Image generation completed: "${data.prompt}" -> ${data.imageUrl}`);
             
-            // Check if we have content to display
-            if (data.fullContent && data.fullContent.trim()) {
-                console.log(`Observer message content (${data.fullContent.length} chars): "${data.fullContent.substring(0, 50)}..."`);
-                
-                // Create message bubble for the observer response
-                observerAssistantMessageElement = addMessageToChat('assistant', `${data.fullContent}`);
-                observerAssistantMessageElement.classList.add('border', 'border-purple-400');
-                
-                // Handle compliance violations if present
-                if (data.compliance_violations && data.compliance_violations.length > 0) {
-                    console.warn("Observer response has compliance violations:", data.compliance_violations);
-                    observerAssistantMessageElement.classList.add('border-2', 'border-red-500', 'opacity-75');
+            // Find and remove the image generation indicator
+            const indicators = chatWindow.querySelectorAll('[data-image-indicator="true"]');
+            indicators.forEach(indicator => {
+                if (indicator.dataset.imagePrompt === data.prompt) {
+                    indicator.remove();
                 }
+            });
+            
+            // Create an image element and add it to the chat (UI only - SDK handles history)
+            const imageMessage = addMessage('assistant', '');
+            const imgElement = document.createElement('img');
+            imgElement.src = data.imageUrl;
+            imgElement.alt = data.prompt;
+            imgElement.style.maxWidth = '100%';
+            imgElement.style.height = 'auto';
+            imgElement.style.borderRadius = '8px';
+            imgElement.style.marginTop = '8px';
+            
+            // Just show the image without the textual description
+            // The SDK already added the proper context to chat history for the LLM
+            imageMessage.textContent = '';
+            imageMessage.appendChild(imgElement);
+        });
+        
+        client.on('imageGenerationError', (data) => {
+            logOutput(`❌ Image generation failed: "${data.prompt}" - ${data.error}`, true);
+            
+            // Find and remove the image generation indicator
+            const indicators = chatWindow.querySelectorAll('[data-image-indicator="true"]');
+            indicators.forEach(indicator => {
+                if (indicator.dataset.imagePrompt === data.prompt) {
+                    indicator.remove();
+                }
+            });
+            
+            // Add error message to chat
+            addMessage('assistant', `❌ Failed to generate image: ${data.error}`);
+        });
+        
+        // --- Unified Message Events ---
+        client.on('messageStart', (data) => {
+            logOutput(`📤 ${data.messageType} message started (${data.conversationId})`);
+            logOutput(`   Content: "${data.content}"`);
+            
+            // Handle different message types
+            if (data.messageType === 'auto') {
+                logOutput(`🔄 Starting auto-turn ${data.turnIndex + 1}/${data.totalTurns}`);
+                
+                // Add a visual indicator in the chat
+                const turnIndicator = addMessage('system', `🔄 Turn ${data.turnIndex + 1}/${data.totalTurns} starting...`, null, 'turn-indicator');
+                turnIndicator.dataset.timestamp = Date.now().toString();
+                turnIndicator.dataset.turnIndex = data.turnIndex.toString();
+                
+                // Add a timeout to clean up stuck turn indicators (30 seconds)
+                setTimeout(() => {
+                    if (turnIndicator.parentNode && turnIndicator.dataset.turnIndicator === 'true') {
+                        logOutput(`⚠️ Cleaning up stuck turn indicator for turn ${data.turnIndex + 1}`, true);
+                        turnIndicator.remove();
+                    }
+                }, 30000);
+            } else if (data.messageType === 'followup') {
+                logOutput(`🔄 Starting follow-up request`);
+                addMessage('system', '🔄 Continuing conversation...', null, 'followup-indicator');
             } else {
-                // No content to display - likely a DO_NOTHING response
-                console.log("Observer message with no content - likely a DO_NOTHING decision");
+                logOutput(`📤 Starting regular message`);
+                // Regular messages already have typing indicators from the send function
+            }
+        });
+        
+        client.on('messageTokens', (data) => {
+            // This is too granular to log every token, but could be used for real-time typing animations
+            // For demonstration purposes, we'll log token counts periodically
+            if (data.content.length > 10) {
+                logOutput(`📝 Received token: ${data.content.length} chars`);
+            }
+        });
+        
+        client.on('messageProgress', (data) => {
+            logOutput(`📊 Message progress (${data.content.length} chars, complete: ${data.isComplete})`);
+            // Progress updates can be used to update UI as content builds
+            // This is especially useful for long responses that are built up progressively
+        });
+        
+        client.on('messageComplete', (data) => {
+            const messageType = data.messageType || 'regular';
+            const contentLength = data.content ? data.content.length : 0;
+            logOutput(`✅ ${messageType} message complete (${contentLength} chars)`);
+            logOutput(`🔍 Message data:`, data); // Debug: log the entire data object
+            
+            // Handle different message types
+            if (messageType === 'auto') {
+                logOutput(`✅ Completed auto-turn ${data.turnIndex + 1}/${data.totalTurns}`);
+                
+                // Remove the turn indicator and add the actual message
+                removeLastTurnIndicator();
+                
+                // Remove the typing indicator if this is the first turn
+                if (data.turnIndex === 0) {
+                    removeTypingIndicator();
+                }
+                
+                if (data.content) {
+                    addMessage('assistant', data.content, data.reasoning);
+                }
+                
+            } else if (messageType === 'followup') {
+                logOutput(`✅ Completed follow-up request`);
+                
+                // Remove follow-up indicator and add the message
+                const followupIndicators = chatWindow.querySelectorAll('.followup-indicator');
+                followupIndicators.forEach(indicator => indicator.remove());
+                
+                if (data.content) {
+                    addMessage('assistant', data.content);
+                }
+                
+            } else {
+                // Regular message
+                logOutput(`✅ Completed regular message`);
+                
+                // If the response has tool calls, handle them
+                if (data.toolCalls && data.toolCalls.length > 0) {
+                    logOutput(`🔧 Message includes tool calls: ${data.toolCalls.length}`);
+                }
+                
+                // Remove typing indicator and add the message to UI
+                removeTypingIndicator();
+                
+                if (data.content && data.content.trim()) {
+                    addMessage('assistant', data.content);
+                }
             }
             
-            // Reset observer message element tracker
-            observerAssistantMessageElement = null;
-        });
-
-        client.on('observerStreamError', (data) => {
-            logOutput(`Received observer error (${data.participantIdentity}):`, data.error, true);
-
-            // Display error in a new chat bubble, clearly marked
-            const errorBubble = addMessageToChat('assistant', `--- OBSERVER ERROR (${data.participantIdentity}): ${data.error} ---`);
-            errorBubble.classList.add('bg-red-100', 'text-red-700', 'border', 'border-red-400');
-
-            observerAssistantMessageElement = null; // Reset observer message element tracker
-        });
-
-        client.on('observerSessionEnded', (data) => {
-            logOutput(`Observer session ended (${data.participantIdentity}). Reason: ${data.reason}`);
-            let reasonText = "Proactive messaging stopped.";
-            if (data.reason === 'max_messages_reached') {
-                reasonText = "Proactive messaging stopped: Maximum proactive messages reached.";
-            } else if (data.reason === 'session_ended') {
-                reasonText = "Proactive messaging stopped: Conversation detected as ended by the agent.";
+            // Check if all messages are complete (when totalMessages is present)
+            if (data.totalMessages) {
+                logOutput(`✅ All ${data.totalMessages} messages completed`);
+                
+                // Clean up all indicators and re-enable UI
+                removeTypingIndicator();
+                removeAllTurnIndicators();
+                setInputEnabled(true, 'Connected - Ready to Chat');
+                updateStatus('Connected - Ready to Chat');
+            } else if (messageType === 'regular') {
+                // For regular messages, re-enable UI immediately
+                setInputEnabled(true, 'Connected - Ready to Chat');
+                updateStatus('Connected - Ready to Chat');
             }
-            const sessionEndedBubble = addMessageToChat('assistant', `--- ${reasonText} ---`);
-            sessionEndedBubble.classList.add('bg-yellow-100', 'text-yellow-700', 'border', 'border-yellow-400', 'italic');
-            updateStatus(reasonText, false); // Update main status bar as well
+        });
+        
+        client.on('messageError', (data) => {
+            const messageType = data.messageType || 'regular';
+            logOutput(`❌ ${messageType} message error: ${data.error}`, true);
+            
+            // Handle different error types
+            if (messageType === 'auto' && data.error.includes('Canceled')) {
+                logOutput(`❌ Canceled auto-turn messages`);
+                
+                // Remove any turn indicators
+                removeAllTurnIndicators();
+                addMessage('system', `❌ Canceled pending auto-turn messages`, null, 'turn-canceled');
+                
+                // Re-enable input since user interrupted
+                setInputEnabled(true, 'Connected - Ready to Chat');
+                updateStatus('Connected - Ready to Chat');
+            } else {
+                // Regular error handling
+                updateStatus(`Error: ${data.error}`, true);
+                
+                // Remove typing indicator and re-enable input
+                removeTypingIndicator();
+                setInputEnabled(true, 'Connected - Ready to Chat');
+            }
         });
 
-        // --- Send Logic (NEW - Handles AsyncIterable for HTTP stream) ---
+
+        // --- Send Logic - Using fully event-driven approach ---
         let httpAssistantMessageElement = null; // Track the HTTP assistant message bubble
         let typingIndicatorElement = null; // Track the typing indicator bubble
 
@@ -299,14 +423,24 @@ async function initializeAndTest() {
             }
         }
 
-        async function sendMessage() {
+        // Changed to standard function from async
+        function sendMessage() {
             httpAssistantMessageElement = null; // Reset HTTP tracker
-            observerAssistantMessageElement = null; // Reset Observer tracker too
             const userMessage = messageInput.value.trim();
             if (!userMessage || sendButton.disabled) return;
 
+            // Clean up any existing turn indicators when sending a new message
+            removeAllTurnIndicators();
+            removeTypingIndicator();
+
             logOutput(`Sending: "${userMessage}"`);
-            addMessageToChat('user', userMessage); // Uses Tailwind classes
+            
+            // Only add to UI if it's not a continuation message
+            if (userMessage !== '[CONTINUE]') {
+                addMessageToChat('user', userMessage); // Uses Tailwind classes
+            } else {
+                logOutput(`📤 Sending continuation request (not displayed in UI)`);
+            }
             messageInput.value = '';
             messageInput.style.height = 'auto';
             messageInput.focus();
@@ -319,291 +453,45 @@ async function initializeAndTest() {
             typingIndicatorElement.classList.remove('bg-gray-200', 'text-gray-800');
             typingIndicatorElement.classList.add('bg-gray-100', 'text-gray-500', 'italic');
 
-            // Determine if streaming, reasoning, and image generation are enabled based on checkboxes
-            const isStreaming = streamInput.checked;
+            // Determine if reasoning and image generation are enabled based on checkboxes
             const isReasoningEnabled = reasoningInput.checked;
             const isImageGenerationEnabled = imageGenerationInput.checked;
             
-            // Prepare message options
+            // Prepare message options - Always use stream: true for event-driven approach
             const messageOptions = {
-                stream: isStreaming,
+                stream: false, // Always use streaming for event-driven approach
                 reasoning: isReasoningEnabled,
                 check_image_generation: isImageGenerationEnabled // Based on checkbox
             };
             
-            // Parse tools from UI to use for this message
-            // try {
-            //     const toolsJson = toolsInput.value.trim();
-            //     if (toolsJson) {
-            //         const parsedTools = JSON.parse(toolsJson);
-            //         if (Array.isArray(parsedTools)) {
-            //             messageOptions.tools = parsedTools;
-            //             logOutput("Using tools from UI for this message:", parsedTools);
-            //
-            //             // Enhanced debugging logs
-            //             console.log("Tools being sent:", JSON.stringify(parsedTools, null, 2));
-            //             console.log("Full messageOptions:", JSON.stringify(messageOptions, null, 2));
-            //         }
-            //     }
-            // } catch (e) {
-            //     logOutput(`Error parsing tools JSON: ${e.message}. Not using tools for this message.`, true);
-            // }
-
+            // Add a simple monkey patch to verify what's in the actual API payload
+            if (!window.__originalRequest && client.requestUtil && client.requestUtil.request) {
+                console.log("Adding requestUtil monitor");
+                window.__originalRequest = client.requestUtil.request;
+                client.requestUtil.request = function(...args) {
+                    if (args.length > 2 && args[2]) {
+                        console.log("🔍 FINAL API REQUEST:", JSON.stringify(args[2], null, 2));
+                    }
+                    return window.__originalRequest.apply(this, args);
+                };
+            }
+            
+            // Send the message using the event-driven approach
             try {
-                // Add a simple monkey patch to verify what's in the actual API payload
-                if (!window.__originalRequest && client.requestUtil && client.requestUtil.request) {
-                    console.log("Adding requestUtil monitor");
-                    window.__originalRequest = client.requestUtil.request;
-                    client.requestUtil.request = function(...args) {
-                        if (args.length > 2 && args[2]) {
-                            console.log("🔍 FINAL API REQUEST:", JSON.stringify(args[2], null, 2));
-                        }
-                        return window.__originalRequest.apply(this, args);
-                    };
-                }
-                
-                // Call send with updated options including tools
+                // Call send with the event-driven approach
                 logOutput("Sending message with options:", messageOptions);
-                const responseOrStream = await client.chat.send(userMessage, messageOptions);
-
-                if (isStreaming && typeof responseOrStream[Symbol.asyncIterator] === 'function') {
-                    // --- Handle HTTP Stream ---
-                    logOutput("Receiving HTTP stream...");
-                    updateStatus('AI is responding (HTTP Stream)...');
-                    httpAssistantMessageElement = null; // Ensure it's null before starting
-                    let accumulatedStreamContent = "";
-                    let accumulatedStreamToolCalls = []; // To accumulate tool calls from stream
-                    let streamFinishReason = null;
-
-                    // Create a function for fast token-by-token rendering
-                    const processStreamWithVisibleTokens = async () => {
-                        try {
-                            // Create message bubble immediately for a more responsive feel
-                            httpAssistantMessageElement = addMessageToChat('assistant', '');
-                            
-                            // Add visual indicator when reasoning is enabled
-                            if (reasoningInput.checked) {
-                                httpAssistantMessageElement.classList.add('border-blue-500');
-                                httpAssistantMessageElement.title = "Reasoning enabled for this response";
-                            }
-                            
-                            removeTypingIndicator();
-                            
-                            // Process the stream as fast as possible
-                            for await (const chunk of responseOrStream) {
-                                logOutput("HTTP Chunk:", chunk);
-                                
-                                const choice = chunk.choices?.[0];
-                                if (!choice) continue;
-
-                                if (choice.delta?.content) {
-                                    // Get just the new content for this chunk
-                                    const newContent = choice.delta.content;
-                                    
-                                    // Add to accumulated content
-                                    accumulatedStreamContent += newContent;
-                                    
-                                    // Use requestAnimationFrame for smoother visual updates - no delay
-                                    requestAnimationFrame(() => {
-                                        // Update UI with new content immediately
-                                        if (accumulatedStreamToolCalls.length === 0 && httpAssistantMessageElement) {
-                                            httpAssistantMessageElement.textContent = accumulatedStreamContent;
-                                        }
-                                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
-                                    });
-                                }
-
-                                if (choice.delta?.tool_calls) {
-                                    choice.delta.tool_calls.forEach(tcPart => {
-                                        const { index, ...toolCallDelta } = tcPart;
-                                        while (accumulatedStreamToolCalls.length <= index) {
-                                            accumulatedStreamToolCalls.push({ function: { arguments: "" } });
-                                        }
-                                        const targetCall = accumulatedStreamToolCalls[index];
-                                        if (toolCallDelta.id) targetCall.id = toolCallDelta.id;
-                                        if (toolCallDelta.type) targetCall.type = toolCallDelta.type;
-                                        if (toolCallDelta.function) {
-                                            if (!targetCall.function) targetCall.function = { name: "", arguments: "" };
-                                            if (toolCallDelta.function.name) targetCall.function.name = toolCallDelta.function.name;
-                                            if (toolCallDelta.function.arguments) targetCall.function.arguments += toolCallDelta.function.arguments;
-                                        }
-                                    });
-                                    
-                                    // Update tool call display
-                                    requestAnimationFrame(() => {
-                                        if (httpAssistantMessageElement) {
-                                            httpAssistantMessageElement.textContent = `Tool call(s) requested:\n${JSON.stringify(accumulatedStreamToolCalls, null, 2)}`;
-                                            httpAssistantMessageElement.classList.add('text-xs', 'bg-yellow-100', 'border', 'border-yellow-300');
-                                        }
-                                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
-                                    });
-                                }
-                                
-                                if (choice.finish_reason) {
-                                    streamFinishReason = choice.finish_reason;
-                                }
-
-                                if (chunk.compliance_violations && chunk.compliance_violations.length > 0) {
-                                    console.warn("HTTP Stream: Compliance violation detected mid-stream:", chunk.compliance_violations);
-                                    if (httpAssistantMessageElement) {
-                                        httpAssistantMessageElement.classList.add('border-2', 'border-red-500');
-                                    }
-                                }
-                            }
-                        } catch (error) {
-                            console.error("Error in stream processing:", error);
-                            throw error;
-                        }
-                    };
-                    
-                    // Start processing the stream with enhanced token visualization
-                    try {
-                        await processStreamWithVisibleTokens();
-                        logOutput("HTTP Stream finished.");
-                        if (streamFinishReason === 'tool_calls' && accumulatedStreamToolCalls.length > 0 && !accumulatedStreamContent) {
-                            // Already displayed by the loop
-                        } else if (!httpAssistantMessageElement && !accumulatedStreamContent && accumulatedStreamToolCalls.length === 0) {
-                            // If nothing was ever displayed (e.g. empty stream)
-                            addMessageToChat('assistant', '[Empty Response]');
-                        }
-                    } catch (streamError) {
-                        logOutput(`Error in stream processing: ${streamError.message}`, true);
-                        // Ensure we have a message element if it failed to create one
-                        if (!httpAssistantMessageElement) {
-                            httpAssistantMessageElement = addMessageToChat('assistant', '[Error processing response]');
-                        }
-                    }
-
-
-                    httpAssistantMessageElement = null;
-                    setInputEnabled(true, 'Connected - Ready to Chat');
-                    updateStatus('Connected - Ready to Chat');
-
-                } else if (!isStreaming && responseOrStream && typeof responseOrStream === 'object' && 'choices' in responseOrStream) {
-                    const response = responseOrStream;
-                    logOutput("Received Non-Streaming HTTP Response:", response);
-                    removeTypingIndicator();
-
-                    const message = response.choices?.[0]?.message;
-                    let displayContent = "";
-                    let messageStyles = [];
-                    let reasoningContent = null;
-
-                    if (message?.tool_calls && message.tool_calls.length > 0) {
-                        displayContent = `Tool call(s) requested:\n${JSON.stringify(message.tool_calls, null, 2)}`;
-                        logOutput("Tool calls detected:", message.tool_calls);
-                        messageStyles = ['text-xs', 'bg-yellow-100', 'border', 'border-yellow-300', 'whitespace-pre-wrap'];
-                    } else if (message?.content) {
-                        // If reasoning content is available and reasoning is enabled, show it directly in the message
-                        if (reasoningInput.checked && message.reasoning) {
-                            reasoningContent = message.reasoning;
-                            logOutput("Reasoning content received:", reasoningContent);
-                            displayContent = `[Reasoning]\n${reasoningContent}\n\n[Response]\n${message.content}`;
-                            messageStyles.push('whitespace-pre-wrap'); // Ensure proper formatting
-                        } else {
-                            displayContent = message.content;
-                        }
-                    } else {
-                        displayContent = "[No content or tool_calls in response]";
-                        logOutput("No textual content or tool_calls in response.", response);
-                    }
-                    
-                    // Handle HTML content (like images) differently
-                    const assistantMsgElement = displayContent.includes('<img')
-                        ? (() => {
-                            const el = document.createElement('div');
-                            el.classList.add('p-2', 'px-4', 'rounded-lg', 'self-start', 'bg-gray-200', 'text-gray-800', 'assistant', 'whitespace-pre-wrap', 'border-transparent');
-                            el.innerHTML = displayContent;
-                            chatWindow.appendChild(el);
-                            return el;
-                        })()
-                        : addMessageToChat('assistant', displayContent);
-                    
-                    if (messageStyles.length > 0) {
-                        assistantMsgElement.classList.add(...messageStyles);
-                    }
-                    
-                    // Add visual indicator when reasoning is enabled
-                    if (reasoningInput.checked) {
-                        assistantMsgElement.classList.add('border-blue-500');
-                        assistantMsgElement.title = "Reasoning enabled for this response";
-                    }
-
-
-                    if (response.compliance_violations && response.compliance_violations.length > 0) {
-                         console.warn("HTTP response has compliance violations:", response.compliance_violations);
-                         assistantMsgElement.classList.add('border-2', 'border-red-500', 'opacity-75');
-                         const violationBubble = addMessageToChat('assistant', `[Content Moderation: ${response.compliance_violations.join(', ')}]`);
-                         violationBubble.classList.add('bg-red-100', 'text-red-700', 'italic');
-                    }
-
-                    // Check if the response contains an image prompt (from check_image_generation being true)
-                    if (message?.image_prompt) {
-                        const imagePrompt = message.image_prompt;
-                        logOutput(`Response contains image prompt: "${imagePrompt}". Generating image directly...`);
-                        
-                        // First make sure the text content of the message is displayed
-                        // This ensures the first issue is fixed - message content appears immediately before loading indicator
-                        
-                        // Create a placeholder for the upcoming image within the existing message
-                        const imagePlaceholder = document.createElement('div');
-                        imagePlaceholder.classList.add('mt-3', 'p-3', 'rounded', 'bg-yellow-100', 'text-yellow-800', 'border', 'border-yellow-200');
-                        imagePlaceholder.innerHTML = `
-                            <div class="flex items-center">
-                                <div class="animate-spin mr-2 h-4 w-4 border-2 border-yellow-800 rounded-full border-t-transparent"></div>
-                                <span>Generating image for: "${imagePrompt}"...</span>
-                            </div>
-                        `;
-                        
-                        // Add the placeholder to the existing assistant message
-                        assistantMsgElement.appendChild(imagePlaceholder);
-                        chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
-                        
-                        // Generate the image directly and update the UI when done
-                        (async () => {
-                            try {
-                                logOutput(`Calling client.generateImage("${imagePrompt}")`);
-                                const imageUrl = await client.generateImage(imagePrompt);
-                                logOutput(`Image generated successfully: ${imageUrl}`);
-                                
-                                // Replace the placeholder with the actual image
-                                imagePlaceholder.innerHTML = `
-                                    <div>
-                                        <img src="${imageUrl}" alt="Generated image for: ${imagePrompt}" class="rounded">
-                                        <div class="text-xs text-gray-500 mt-1">Generated from: "${imagePrompt}"</div>
-                                    </div>
-                                `;
-                                
-                                // Update styling
-                                imagePlaceholder.classList.remove('bg-yellow-100', 'text-yellow-800', 'border-yellow-200');
-                                imagePlaceholder.classList.add('bg-green-50', 'border-green-200');
-                                
-                                // Scroll to ensure the image is visible
-                                chatWindow.scrollTo({ top: chatWindow.scrollHeight, behavior: 'smooth' });
-                            } catch (error) {
-                                logOutput(`Error generating image: ${error.message || error}`, true);
-                                imagePlaceholder.innerHTML = `
-                                    <div class="text-red-600">
-                                        Failed to generate image: ${error.message || 'Unknown error'}
-                                    </div>
-                                `;
-                                imagePlaceholder.classList.remove('bg-yellow-100', 'text-yellow-800', 'border-yellow-200');
-                                imagePlaceholder.classList.add('bg-red-50', 'border-red-200', 'text-red-700');
-                            }
-                        })();
-                    }
-
-                    updateStatus('Connected - Ready to Chat');
-                    setInputEnabled(true, 'Connected - Ready to Chat');
-                } else {
-                     // Should not happen with the new logic, but log if it does
-                     logOutput("Unexpected response type from client.chat.send()", true);
-                     removeTypingIndicator();
-                     updateStatus('Unexpected response from SDK', true);
-                     setInputEnabled(true, 'Connected - Ready to Chat');
-                }
-
+                
+                // Send message - responses will come through events
+                client.chat.send(userMessage, messageOptions);
+                
+                // The typing indicator is already added and will be replaced 
+                // when messageComplete event fires
+                logOutput("Message sent - responses will arrive via events");
+                updateStatus('AI is responding...');
+                
+                // Note: Input will be re-enabled in the messageComplete event handler
             } catch (error) {
+                // Handle any synchronous errors during sending
                 logOutput(`Error sending message: ${error.message || error}`, true);
                 updateStatus(`Send Error: ${error.message || 'Unknown error'}`, true);
                 removeTypingIndicator();
@@ -633,101 +521,8 @@ async function initializeAndTest() {
             }
         });
 
-        // --- Manual Connection Button Handlers ---
-        const connectHandler = async () => {
-            if (!client.options?.observer?.enabled) {
-                 updateStatus("Observer not enabled in SDK config.", true);
-                 return;
-            }
-            logOutput("Manual connect initiated...");
-            updateStatus("Connecting...");
-            updateConnectionButtons('connecting');
-            try {
-                await client.connectObserverManually(); // Use manual connect method
-            } catch (error) {
-                const errorMsg = `Manual Connect Failed: ${error instanceof Error ? error.message : String(error)}`;
-                logOutput(errorMsg, true);
-                updateStatus(errorMsg, true);
-                updateConnectionButtons('disconnected');
-            }
-        };
-        
-        // Check if elements exist before assigning handlers
-        if (connectButton) connectButton.onclick = connectHandler;
-        if (observerConnectButton) observerConnectButton.onclick = connectHandler;
-        
-        const disconnectHandler = async () => {
-            logOutput("Manual disconnect initiated...");
-            updateStatus("Disconnecting...");
-            updateConnectionButtons('disconnecting');
-            try {
-                await client.disconnectObserverManually(); // Use manual disconnect method
-                // Status update handled by 'observerDisconnected' event listener
-            } catch (error) {
-                const errorMsg = `Disconnect Failed: ${error instanceof Error ? error.message : String(error)}`;
-                logOutput(errorMsg, true);
-                updateStatus(errorMsg, true);
-                updateConnectionButtons('connected'); // Assume still connected if disconnect fails
-            }
-        };
-        
-        // Check if elements exist before assigning handlers
-        if (disconnectButton) disconnectButton.onclick = disconnectHandler;
-        if (observerDisconnectButton) observerDisconnectButton.onclick = disconnectHandler;
-        
-        // --- Observer Configuration Update Handler ---
-        const updateConfigHandler = async () => {
-            if (!client) {
-                updateStatus("Client not initialized, cannot update observer config", true);
-                return;
-            }
-            
-            console.log("Updating observer configuration from UI values");
-            try {
-                const updatedConfig = {
-                    enabled: true, // Always keep enabled for this example
-                    initial_inactivity_delay: parseInt(initialInactivityDelayInput.value, 10) || 120,
-                    backoff_multiplier: parseFloat(backoffMultiplierInput.value) || 1.5,
-                    max_inactivity_messages: parseInt(maxInactivityMessagesInput.value, 10) || 2
-                };
-                
-                // Update the observer configuration
-                client.updateObserverConfig(updatedConfig);
-                
-                // Update our stored config
-                currentObserverConfig = { ...updatedConfig };
-                
-                logOutput("Observer configuration updated:", updatedConfig);
-                updateStatus("Observer configuration updated", false);
-                
-                // Flash the button to indicate success
-                if (updateObserverConfigButton) {
-                    updateObserverConfigButton.classList.add('bg-green-500');
-                    setTimeout(() => {
-                        updateObserverConfigButton.classList.remove('bg-green-500');
-                    }, 1000);
-                }
-                
-            } catch (error) {
-                const errorMsg = `Failed to update observer config: ${error instanceof Error ? error.message : String(error)}`;
-                logOutput(errorMsg, true);
-                updateStatus(errorMsg, true);
-                
-                // Flash the button red to indicate failure
-                if (updateObserverConfigButton) {
-                    updateObserverConfigButton.classList.add('bg-red-500');
-                    setTimeout(() => {
-                        updateObserverConfigButton.classList.remove('bg-red-500');
-                    }, 1000);
-                }
-            }
-        };
-        
-        // Check if element exists before assigning handler
-        if (updateObserverConfigButton) updateObserverConfigButton.onclick = updateConfigHandler;
-
         // Note: Connection is now manual
-        logOutput('SDK Initialized. Observer connection requires manual initiation.');
+        logOutput('SDK Initialized.');
 
     } catch (error) { // Catch initialization errors
         const errorMsg = `Fatal Initialization Error: ${error.message || error}`;
@@ -752,6 +547,17 @@ function updateChatConfig() {
     }
     
     try {
+        // Create conversational turns configuration from form values
+        const conversationalTurnsConfig = {
+            enabled: autoTurnInput.checked,
+            splitProbability: parseFloat(splitProbabilityInput.value) || 1.0,
+            shortSentenceThreshold: parseInt(shortSentenceThresholdInput.value, 10) || 30,
+            baseTypingSpeed: parseInt(baseTypingSpeedInput.value, 10) || 45,
+            speedVariation: parseFloat(speedVariationInput.value) || 0.2,
+            minDelay: parseInt(minDelayInput.value, 10) || 500,
+            maxDelay: parseInt(maxDelayInput.value, 10) || 3000
+        };
+
         // Create updated chat configuration from form values
         const updatedChatConfig = {
             model: 'animafmngvy7-xavier-r1', // Keep model the same
@@ -760,7 +566,9 @@ function updateChatConfig() {
             temperature: parseFloat(temperatureInput.value) || 0.7,
             stream: streamInput.checked,
             max_tokens: parseInt(maxTokensInput.value, 10) || 1024,
-            reasoning: reasoningInput.checked
+            reasoning: reasoningInput.checked,
+            // Use object configuration for autoTurn to include detailed settings
+            autoTurn: autoTurnInput.checked ? conversationalTurnsConfig : false
         };
 
         // Parse tools if needed
@@ -803,8 +611,26 @@ function updateChatConfig() {
     }
 }
 
+// Toggle functionality for conversational turns settings
+function setupToggleConversationalTurnsSettings() {
+    if (toggleTurnsSettingsButton && turnsSettingsContent && toggleTurnsText) {
+        toggleTurnsSettingsButton.addEventListener('click', () => {
+            const isHidden = turnsSettingsContent.classList.contains('hidden');
+            
+            if (isHidden) {
+                turnsSettingsContent.classList.remove('hidden');
+                toggleTurnsText.textContent = 'Hide';
+            } else {
+                turnsSettingsContent.classList.add('hidden');
+                toggleTurnsText.textContent = 'Show';
+            }
+        });
+    }
+}
+
 // Call the initialization function when the script loads
 initializeAndTest();
+setupToggleConversationalTurnsSettings();
 
 // After initialization, add event listeners to form fields to update config dynamically
 // Wait for DOM to be fully loaded and client to be initialized
@@ -826,7 +652,15 @@ document.addEventListener('DOMContentLoaded', () => {
             complianceInput,
             reasoningInput,
             imageGenerationInput,
-            toolsInput
+            autoTurnInput, // Include auto turn checkbox
+            toolsInput,
+            // Conversational turns advanced settings
+            splitProbabilityInput,
+            shortSentenceThresholdInput,
+            baseTypingSpeedInput,
+            speedVariationInput,
+            minDelayInput,
+            maxDelayInput
         ].forEach(input => {
             if (input) {
                 const eventType = input.type === 'checkbox' ? 'change' : 'input';

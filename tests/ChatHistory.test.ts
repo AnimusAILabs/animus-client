@@ -11,9 +11,6 @@ vi.mock('../src/AuthHandler');
 describe('ChatModule History Management', () => {
   let chatModule: ChatModule;
   let requestUtilMock: RequestUtil;
-  const mockIsObserverConnected = vi.fn(() => false);
-  const mockSendObserverText = vi.fn(async () => { /* Default mock */ });
-  const mockResetUserActivity = vi.fn(() => { /* Default mock */ });
 
   // Default config for tests with history enabled
   const defaultChatOptions: AnimusChatOptions = {
@@ -35,17 +32,11 @@ describe('ChatModule History Management', () => {
     
     // Reset mocks
     vi.resetAllMocks();
-    mockIsObserverConnected.mockReturnValue(false);
-    mockSendObserverText.mockClear();
-    mockResetUserActivity.mockClear();
 
     // Create fresh ChatModule instance
     chatModule = new ChatModule(
       requestUtilMock,
-      defaultChatOptions,
-      mockIsObserverConnected,
-      mockSendObserverText,
-      mockResetUserActivity
+      defaultChatOptions
     );
     
     // Add some initial messages for testing
@@ -169,10 +160,7 @@ describe('ChatModule History Management', () => {
       {
         ...defaultChatOptions,
         historySize: 0 // Disable history
-      },
-      mockIsObserverConnected,
-      mockSendObserverText,
-      mockResetUserActivity
+      }
     );
     
     // Try to set history

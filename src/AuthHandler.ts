@@ -41,7 +41,6 @@ interface TokenResponse {
     token: string;
   };
   livekit: {
-    observer: LiveKitContextDetails;
     voice: LiveKitContextDetails;
   };
 }
@@ -53,7 +52,7 @@ export interface LiveKitDetails {
 }
 
 /** Type for the LiveKit context */
-export type LiveKitContext = 'observer' | 'voice';
+export type LiveKitContext = 'voice';
 
 
 /**
@@ -81,10 +80,6 @@ export class AuthHandler {
   private animusTokenExpiry: number | null = null; // Expiry time in milliseconds
 
   // Store LiveKit details separately for each context
-  private livekitObserverToken: string | null = null;
-  private livekitObserverUrl: string | null = null;
-  private livekitObserverExpiry: number | null = null; // Expiry time in milliseconds
-
   private livekitVoiceToken: string | null = null;
   private livekitVoiceUrl: string | null = null;
   private livekitVoiceExpiry: number | null = null; // Expiry time in milliseconds
@@ -93,10 +88,6 @@ export class AuthHandler {
   // Storage keys
   private readonly animusTokenKey = 'animus_sdk_auth_token';
   private readonly animusExpiryKey = 'animus_sdk_auth_expiry';
-
-  private readonly livekitObserverTokenKey = 'animus_sdk_lk_obs_token';
-  private readonly livekitObserverUrlKey = 'animus_sdk_lk_obs_url';
-  private readonly livekitObserverExpiryKey = 'animus_sdk_lk_obs_expiry';
 
   private readonly livekitVoiceTokenKey = 'animus_sdk_lk_voice_token';
   private readonly livekitVoiceUrlKey = 'animus_sdk_lk_voice_url';
@@ -120,12 +111,6 @@ export class AuthHandler {
     const animusExp = this.tokenStore.getItem(this.animusExpiryKey);
     this.animusTokenExpiry = animusExp ? parseInt(animusExp, 10) : null;
 
-    // Load Observer details
-    this.livekitObserverToken = this.tokenStore.getItem(this.livekitObserverTokenKey);
-    this.livekitObserverUrl = this.tokenStore.getItem(this.livekitObserverUrlKey);
-    const observerExp = this.tokenStore.getItem(this.livekitObserverExpiryKey);
-    this.livekitObserverExpiry = observerExp ? parseInt(observerExp, 10) : null;
-
     // Load Voice details
     this.livekitVoiceToken = this.tokenStore.getItem(this.livekitVoiceTokenKey);
     this.livekitVoiceUrl = this.tokenStore.getItem(this.livekitVoiceUrlKey);
@@ -134,10 +119,8 @@ export class AuthHandler {
 
     console.log('AuthHandler: Loaded details from storage.', {
         hasAnimusToken: !!this.animusToken,
-        hasLivekitObserverToken: !!this.livekitObserverToken,
         hasLivekitVoiceToken: !!this.livekitVoiceToken,
         animusExpires: this.animusTokenExpiry ? new Date(this.animusTokenExpiry).toISOString() : null,
-        observerExpires: this.livekitObserverExpiry ? new Date(this.livekitObserverExpiry).toISOString() : null,
         voiceExpires: this.livekitVoiceExpiry ? new Date(this.livekitVoiceExpiry).toISOString() : null,
     });
   }
@@ -167,19 +150,16 @@ export class AuthHandler {
 
       // Validate the structure
       if (!data.animus?.token ||
-          !data.livekit?.observer?.token || !data.livekit?.observer?.url ||
           !data.livekit?.voice?.token || !data.livekit?.voice?.url) {
         console.error("AuthHandler: Invalid response structure received:", data);
-        throw new AuthenticationError('Invalid response from provider: missing required fields (animus.token, livekit.observer.*, livekit.voice.*)');
+        throw new AuthenticationError('Invalid response from provider: missing required fields (animus.token, livekit.voice.*)');
       }
 
       // Decode tokens to get expiry
       let animusPayload: JwtPayload;
-      let observerPayload: JwtPayload;
       let voicePayload: JwtPayload;
       try {
         animusPayload = jwtDecode<JwtPayload>(data.animus.token);
-        observerPayload = jwtDecode<JwtPayload>(data.livekit.observer.token);
         voicePayload = jwtDecode<JwtPayload>(data.livekit.voice.token);
       } catch (decodeError) {
          console.error("AuthHandler: Error decoding JWT:", decodeError);
@@ -187,7 +167,7 @@ export class AuthHandler {
       }
 
 
-      if (!animusPayload.exp || !observerPayload.exp || !voicePayload.exp) {
+      if (!animusPayload.exp || !voicePayload.exp) {
           throw new AuthenticationError('Invalid token(s) received: missing exp claim.');
       }
 
@@ -196,14 +176,6 @@ export class AuthHandler {
       this.animusTokenExpiry = (animusPayload.exp * 1000) - this.bufferTime;
       this.tokenStore.setItem(this.animusTokenKey, this.animusToken);
       this.tokenStore.setItem(this.animusExpiryKey, this.animusTokenExpiry.toString());
-
-      // Store Observer details
-      this.livekitObserverToken = data.livekit.observer.token;
-      this.livekitObserverUrl = data.livekit.observer.url;
-      this.livekitObserverExpiry = (observerPayload.exp * 1000) - this.bufferTime;
-      this.tokenStore.setItem(this.livekitObserverTokenKey, this.livekitObserverToken);
-      this.tokenStore.setItem(this.livekitObserverUrlKey, this.livekitObserverUrl);
-      this.tokenStore.setItem(this.livekitObserverExpiryKey, this.livekitObserverExpiry.toString());
 
       // Store Voice details
       this.livekitVoiceToken = data.livekit.voice.token;
@@ -216,7 +188,6 @@ export class AuthHandler {
 
       console.log('AuthHandler: Successfully fetched and stored new details.', {
           animusExpires: new Date(this.animusTokenExpiry).toISOString(),
-          observerExpires: new Date(this.livekitObserverExpiry).toISOString(),
           voiceExpires: new Date(this.livekitVoiceExpiry).toISOString(),
       });
 
@@ -242,10 +213,7 @@ export class AuthHandler {
        let token: string | null;
        let expiry: number | null;
 
-       if (context === 'observer') {
-           token = this.livekitObserverToken;
-           expiry = this.livekitObserverExpiry;
-       } else if (context === 'voice') {
+       if (context === 'voice') {
            token = this.livekitVoiceToken;
            expiry = this.livekitVoiceExpiry;
        } else {
@@ -279,7 +247,7 @@ export class AuthHandler {
   /**
    * Retrieves the current valid LiveKit URL and token for the specified context,
    * fetching new details if necessary.
-   * @param context - The LiveKit context ('observer' or 'voice') for which to get details.
+   * @param context - The LiveKit context ('voice') for which to get details.
    * @returns An object containing the LiveKit URL and token for the specified context.
    * @throws {AuthenticationError} If valid details cannot be obtained.
    */
@@ -292,10 +260,7 @@ export class AuthHandler {
       let url: string | null;
       let token: string | null;
 
-      if (context === 'observer') {
-          url = this.livekitObserverUrl;
-          token = this.livekitObserverToken;
-      } else if (context === 'voice') {
+      if (context === 'voice') {
           url = this.livekitVoiceUrl;
           token = this.livekitVoiceToken;
       } else {
@@ -319,18 +284,12 @@ export class AuthHandler {
     console.log('AuthHandler: Clearing all stored details.');
     this.animusToken = null;
     this.animusTokenExpiry = null;
-    this.livekitObserverToken = null;
-    this.livekitObserverUrl = null;
-    this.livekitObserverExpiry = null;
     this.livekitVoiceToken = null;
     this.livekitVoiceUrl = null;
     this.livekitVoiceExpiry = null;
 
     this.tokenStore.removeItem(this.animusTokenKey);
     this.tokenStore.removeItem(this.animusExpiryKey);
-    this.tokenStore.removeItem(this.livekitObserverTokenKey);
-    this.tokenStore.removeItem(this.livekitObserverUrlKey);
-    this.tokenStore.removeItem(this.livekitObserverExpiryKey);
     this.tokenStore.removeItem(this.livekitVoiceTokenKey);
     this.tokenStore.removeItem(this.livekitVoiceUrlKey);
     this.tokenStore.removeItem(this.livekitVoiceExpiryKey);

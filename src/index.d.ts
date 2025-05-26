@@ -58,8 +58,6 @@ export interface ObserverCompleteData {
   usage?: ChatCompletionResponse['usage'] | null;
   /** Final compliance violations status for the Observer message. */
   compliance_violations?: string[] | null;
-  /** Observer metadata containing decision information */
-  observer_metadata?: any;
   /** The original message content before processing */
   rawContent?: string;
 }

@@ -1,5 +1,7 @@
 import { RequestUtil, ApiError } from './RequestUtil';
 import type { AnimusChatOptions } from './AnimusClient'; // Import the new type
+import { ConversationalTurnsManager, ConversationalTurnsConfigValidator } from './conversational-turns';
+import type { GroupMetadata } from './conversational-turns/types';
 // --- Interfaces based on API Documentation ---
 
 export interface ToolCall {
@@ -21,13 +23,18 @@ export interface Tool {
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'observer' | 'tool';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null; // Can be null if tool_calls are present or for tool responses
   name?: string; // Optional name for user/assistant roles
   reasoning?: string; // Optional field to store extracted <think> content
   timestamp?: string; // ISO timestamp when message was created
   tool_calls?: ToolCall[]; // For assistant messages requesting a tool call
   tool_call_id?: string; // For tool messages responding to a tool call
+  compliance_violations?: string[]; // Track compliance violations for context
+  // Group metadata for conversational turns
+  groupId?: string; // Unique identifier for grouped messages
+  messageIndex?: number; // Index within the group (0-based)
+  totalInGroup?: number; // Total number of messages in the group
 }
 
 // Keep all optional fields as optional in the request interface
@@ -51,6 +58,7 @@ export interface ChatCompletionRequest {
   length_penalty?: number;
   compliance?: boolean;
   check_image_generation?: boolean;
+  autoTurn?: boolean; // Enable autoTurn feature for intelligent conversation splitting
 }
 
 // --- Response Interfaces (remain the same) ---
@@ -62,6 +70,8 @@ interface ChatCompletionChoice {
     content: string | null; // Can be null if tool_calls are present
     tool_calls?: ToolCall[];
     image_prompt?: string; // Prompt for generating an image
+    turns?: string[]; // Array of split conversation turns from autoTurn
+    next?: boolean; // Indicates if a follow-up message is likely
   };
   finish_reason: string; // e.g., 'stop', 'length', 'tool_calls'
   compliance_violations?: string[]; // Violations specific to this choice (for n > 1)
@@ -87,6 +97,8 @@ interface ChatCompletionChunkChoiceDelta {
   // For streaming, tool_calls might be partial and include an index
   tool_calls?: (Partial<ToolCall> & { index: number; function?: Partial<ToolCall['function']> })[];
   reasoning?: string | null; // New field for reasoning content in chunks
+  turns?: string[]; // Array of split conversation turns from autoTurn
+  next?: boolean; // Indicates if a follow-up message is likely
 }
 
 interface ChatCompletionChunkChoice {
@@ -114,40 +126,100 @@ export class ChatModule {
   private config?: AnimusChatOptions; // Store the provided chat config
   private systemMessage?: ChatMessage; // Derived from config
   private chatHistory: ChatMessage[] = []; // Store conversation history (excluding system message)
-
-  // Observer integration functions (passed from AnimusClient)
-  private isObserverConnected: () => boolean;
-  private sendObserverText: (text: string) => Promise<void>;
-  private resetUserActivity?: () => void;
   
   // Reference to the parent client's generateImage function
   private generateImage?: (prompt: string) => Promise<string>;
+  
+  // Event emitter for conversational turn events (passed from AnimusClient)
+  private eventEmitter?: (event: string, data: any) => void;
+  
+  // Conversational turns manager
+  private conversationalTurnsManager?: ConversationalTurnsManager;
+  
+  // Track pending follow-up requests
+  private pendingFollowUpRequest: boolean = false;
+  
+  // Store last request parameters for follow-up requests
+  private lastRequestParameters?: any;
 
   constructor(
       requestUtil: RequestUtil,
       chatOptions: AnimusChatOptions | undefined, // Receive the whole config object or undefined
-      // Add observer functions to constructor
-      isObserverConnected: () => boolean,
-      sendObserverText: (text: string) => Promise<void>,
-      resetUserActivity?: () => void,
       // Add generateImage function from parent client
-      generateImage?: (prompt: string) => Promise<string>
+      generateImage?: (prompt: string) => Promise<string>,
+      // Add event emitter for conversational turn events
+      eventEmitter?: (event: string, data: any) => void
   ) {
     this.requestUtil = requestUtil;
     this.config = chatOptions;
-    // Removed eventEmitter storage
-
-    // Store observer functions
-    this.isObserverConnected = isObserverConnected;
-    this.sendObserverText = sendObserverText;
-    this.resetUserActivity = resetUserActivity;
+    this.eventEmitter = eventEmitter;
     this.generateImage = generateImage;
 
     // Set system message if config is provided
      if (this.config?.systemMessage) {
          this.systemMessage = { role: 'system', content: this.config.systemMessage };
      }
+     
+     // Initialize conversational turns if enabled
+     this.initializeConversationalTurns();
      // Note: Model check happens within completions/send if needed
+   }
+   
+   /**
+    * Initialize conversational turns manager if autoTurn is enabled
+    */
+   private initializeConversationalTurns(): void {
+     console.log('[Chat] Initializing conversational turns, autoTurn:', this.config?.autoTurn);
+     if (this.config?.autoTurn) {
+       let config;
+       
+       // Handle both boolean and object configurations
+       if (typeof this.config.autoTurn === 'boolean') {
+         config = ConversationalTurnsConfigValidator.fromAutoTurn(this.config.autoTurn);
+       } else {
+         // It's a ConversationalTurnsConfig object
+         config = ConversationalTurnsConfigValidator.mergeWithDefaults(this.config.autoTurn);
+       }
+       
+       console.log('[Chat] Creating conversational turns manager with config:', config);
+       this.conversationalTurnsManager = new ConversationalTurnsManager(
+         config,
+         (content, violations, toolCalls, groupMetadata) => {
+           this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata);
+         },
+         this.eventEmitter
+       );
+       console.log('[Chat] Conversational turns manager created:', !!this.conversationalTurnsManager);
+       
+       // Set up listener for conversational turns completion to handle pending follow-ups
+       if (this.eventEmitter) {
+         const originalEmitter = this.eventEmitter;
+         this.eventEmitter = (event: string, data: any) => {
+           if (event === 'conversationalTurnsComplete' && this.pendingFollowUpRequest) {
+             console.log('[Chat] Conversational turns completed, sending pending follow-up request');
+             this.pendingFollowUpRequest = false;
+             this.sendFollowUpRequest();
+           }
+           originalEmitter(event, data);
+         };
+       }
+     } else {
+       console.log('[Chat] AutoTurn disabled, not creating conversational turns manager');
+     }
+   }
+   
+   /**
+    * Helper method to determine if autoTurn is enabled from the configuration
+    * @param autoTurnConfig The autoTurn configuration (boolean or object)
+    * @returns true if autoTurn is enabled, false otherwise
+    */
+   private getAutoTurnEnabled(autoTurnConfig: boolean | import('./conversational-turns/types').ConversationalTurnsConfig | undefined): boolean {
+     if (typeof autoTurnConfig === 'boolean') {
+       return autoTurnConfig;
+     } else if (typeof autoTurnConfig === 'object' && autoTurnConfig !== null) {
+       return autoTurnConfig.enabled;
+     }
+     return false;
    }
    
    /**
@@ -167,6 +239,9 @@ export class ChatModule {
        this.systemMessage = { role: 'system', content: config.systemMessage };
      }
 
+     // Reinitialize conversational turns if autoTurn configuration changed
+     this.initializeConversationalTurns();
+
      console.log('[Animus SDK] ChatModule configuration updated:', JSON.stringify({
        model: config.model,
        systemMessage: config.systemMessage ? `${config.systemMessage.substring(0, 20)}...` : undefined,
@@ -174,7 +249,8 @@ export class ChatModule {
        temperature: config.temperature,
        stream: config.stream,
        max_tokens: config.max_tokens,
-       reasoning: config.reasoning
+       reasoning: config.reasoning,
+       autoTurn: config.autoTurn
      }));
    }
 
@@ -233,6 +309,9 @@ export class ChatModule {
         
         // Add check_image_generation parameter (just like other params)
         check_image_generation: request.check_image_generation,
+        
+        // Add autoTurn parameter to enable server-side conversation splitting
+        autoTurn: request.autoTurn ?? defaults.autoTurn ?? false,
 
         // Tool calling parameters
         tools: request.tools ?? defaults.tools,
@@ -285,28 +364,25 @@ export class ChatModule {
        const availableSlots = historySize - newUserMessages.length;
        if (availableSlots > 0) {
            const historyCount = Math.min(this.chatHistory.length, availableSlots);
-           const relevantHistory = this.chatHistory.slice(-historyCount)
-               // Map history to include necessary fields for API payload
-               .map(msg => {
-                   const historyMsgPayload: Partial<ChatMessage> = {
-                       role: msg.role,
-                       content: msg.content,
-                   };
-                   if (msg.name) {
-                       historyMsgPayload.name = msg.name;
-                   }
-                   if (msg.role === 'assistant' && msg.tool_calls) {
-                       historyMsgPayload.tool_calls = msg.tool_calls;
-                   }
-                   // Note: tool_call_id is part of a 'tool' role message,
-                   // and 'tool' role messages are typically not re-sent as history in the same way,
-                   // but if they were, the 'content' would be the tool's output.
-                   // The current structure of ChatMessage includes tool_call_id for role 'tool'.
-                   // If a 'tool' message from history needs to be sent, its 'content' is its primary payload.
-                   // The API expects 'tool_call_id' on new 'tool' messages, not necessarily historical ones.
-                   // For now, we only explicitly add tool_calls for assistant messages from history.
-                   return historyMsgPayload as ChatMessage; // Cast to ChatMessage, assuming content will be string | null
-               });
+           const historyMessages = this.chatHistory.slice(-historyCount);
+           
+           // Reconstruct grouped messages for API requests
+           const reconstructedHistory = this.reconstructGroupedMessages(historyMessages);
+           
+           // Map reconstructed history to include necessary fields for API payload
+           const relevantHistory = reconstructedHistory.map(msg => {
+               const historyMsgPayload: Partial<ChatMessage> = {
+                   role: msg.role,
+                   content: msg.content,
+               };
+               if (msg.name) {
+                   historyMsgPayload.name = msg.name;
+               }
+               if (msg.role === 'assistant' && msg.tool_calls) {
+                   historyMsgPayload.tool_calls = msg.tool_calls;
+               }
+               return historyMsgPayload as ChatMessage;
+           });
            messagesToSend.push(...relevantHistory);
         }
     }
@@ -317,6 +393,9 @@ export class ChatModule {
     payload.messages = messagesToSend; // Update payload
     // --- End System Message & History Management ---
 
+    // Store request parameters for follow-up requests (excluding messages)
+    this.lastRequestParameters = { ...payload };
+    delete this.lastRequestParameters.messages; // Don't store messages as they'll be rebuilt
 
     if (isStreamingRequest) { // Check the captured value
       // Store the user messages that were sent *before* processing the stream
@@ -347,6 +426,8 @@ export class ChatModule {
         let accumulatedContent: string | null = ''; // Can be null if only tool_calls
         let accumulatedToolCalls: ToolCall[] = [];
         let complianceViolations: string[] | undefined;
+        let accumulatedTurns: string[] | undefined;
+        let hasNext: boolean | undefined;
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -373,12 +454,57 @@ export class ChatModule {
                 const data = line.substring(6).trim();
                 if (data === '[DONE]') {
                   // Stream is officially complete
-                  self.addAssistantResponseToHistory(
-                    accumulatedContent,
-                    complianceViolations,
-                    false,
-                    accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
-                  );
+                  
+                  // Try to process with conversational turns first
+                  if (self.conversationalTurnsManager) {
+                    console.log('[Chat] Stream complete, processing with conversational turns');
+                    console.log('[Chat] Accumulated turns:', accumulatedTurns?.length || 0);
+                    console.log('[Chat] Has next:', hasNext);
+                    const wasProcessed = self.conversationalTurnsManager.processResponse(
+                      accumulatedContent,
+                      complianceViolations,
+                      accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                      accumulatedTurns
+                    );
+                    
+                    // If not processed by turns manager, emit completion event and add to history directly
+                    if (!wasProcessed) {
+                      // Emit messageComplete event
+                      if (self.eventEmitter) {
+                        self.eventEmitter('messageComplete', { 
+                          content: accumulatedContent || '',
+                          ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
+                        });
+                      }
+                      
+                      self.addAssistantResponseToHistory(
+                        accumulatedContent,
+                        complianceViolations,
+                        accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                      );
+                    }
+                  } else {
+                    // No turns manager, emit completion event and add to history
+                    if (self.eventEmitter) {
+                      self.eventEmitter('messageComplete', { 
+                        content: accumulatedContent || '',
+                        ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
+                      });
+                    }
+                    
+                    self.addAssistantResponseToHistory(
+                      accumulatedContent,
+                      complianceViolations,
+                      accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                    );
+                  }
+                  
+                  // Handle automatic follow-up if next is true
+                  if (hasNext) {
+                    console.log('[Chat] Auto-sending follow-up request due to next=true (streaming)');
+                    self.sendFollowUpRequest();
+                  }
+                  
                   return; // Exit the generator function
                 }
 
@@ -394,6 +520,19 @@ export class ChatModule {
                         if (delta.content) {
                             if (accumulatedContent === null) accumulatedContent = ""; // Initialize if it was null
                             accumulatedContent += delta.content;
+                            
+                            // Emit token event for event-driven approach
+                            if (self.eventEmitter) {
+                              self.eventEmitter('messageTokens', { content: delta.content });
+                            }
+                            
+                            // Periodically emit progress events 
+                            if (self.eventEmitter && (accumulatedContent.length % 20 === 0)) {
+                              self.eventEmitter('messageProgress', { 
+                                content: accumulatedContent,
+                                isComplete: false
+                              });
+                            }
                         }
                         if (delta.tool_calls) {
                             // This is a simplified accumulation.
@@ -442,12 +581,32 @@ export class ChatModule {
                                 }
                             });
                         }
+                        
+                        // Accumulate turns and next fields from autoTurn feature
+                        if (delta.turns) {
+                            accumulatedTurns = delta.turns;
+                        }
+                        if (delta.next !== undefined) {
+                            hasNext = delta.next;
+                        }
+                        
                         if (choice.finish_reason === 'tool_calls' && accumulatedContent === '') {
                             accumulatedContent = null; // Explicitly set to null if finish_reason is tool_calls and no content
                         }
                     }
                   }
-                  // Compliance violations are not sent in streaming chunks
+                  
+                  // Track compliance violations
+                  if (chunk.compliance_violations) {
+                    complianceViolations = chunk.compliance_violations;
+                    
+                    // Emit error event for compliance violations
+                    if (self.eventEmitter && complianceViolations.length > 0) {
+                      self.eventEmitter('messageError', { 
+                        error: `Compliance violations: ${complianceViolations.join(', ')}` 
+                      });
+                    }
+                  }
                 } catch (e) {
                   console.error('[Animus SDK] Failed to parse stream chunk:', data, e);
                   // Re-throw error to be caught by the caller iterating the stream
@@ -458,12 +617,39 @@ export class ChatModule {
           }
         } catch (error) {
           console.error("[Animus SDK] Error processing HTTP stream:", error);
-          self.addAssistantResponseToHistory(
-            accumulatedContent,
-            complianceViolations,
-            false,
-            accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
-          );
+          
+          // Try to process with conversational turns first, even in error cases
+          if (self.conversationalTurnsManager && accumulatedContent) {
+            const wasProcessed = self.conversationalTurnsManager.processResponse(
+              accumulatedContent,
+              complianceViolations,
+              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+            );
+            
+            // If not processed by turns manager, fall back to standard history update
+            if (!wasProcessed) {
+              self.addAssistantResponseToHistory(
+                accumulatedContent,
+                complianceViolations,
+                accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+              );
+            }
+          } else {
+            // No turns manager or no content, just add to history directly
+            self.addAssistantResponseToHistory(
+              accumulatedContent,
+              complianceViolations,
+              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+            );
+          }
+          
+          // Emit error event
+          if (self.eventEmitter) {
+            self.eventEmitter('messageError', { 
+              error: error instanceof Error ? error : String(error) 
+            });
+          }
+          
           throw error; // Re-throwing allows caller to handle
         } finally {
           reader.releaseLock();
@@ -494,13 +680,54 @@ export class ChatModule {
           const assistantToolCalls = response.choices?.[0]?.message?.tool_calls;
 
           if (assistantMessageContent !== undefined || assistantToolCalls) {
-              // Use addAssistantResponseToHistory to handle cleaning/trimming and check compliance
-              this.addAssistantResponseToHistory(
-                  assistantMessageContent ?? null, // Pass null if content is undefined
+              console.log('[Chat] Non-streaming response, processing with conversational turns');
+              console.log('[Chat] Has conversational turns manager:', !!this.conversationalTurnsManager);
+              console.log('[Chat] Response content:', assistantMessageContent);
+              
+              // Extract turns and next from the API response
+              const apiTurns = assistantMessage?.turns;
+              const hasNext = assistantMessage?.next;
+              
+              console.log('[Chat] API turns:', apiTurns?.length || 0, 'turns');
+              console.log('[Chat] Has next:', hasNext);
+              
+              // Try to process with conversational turns first
+              const wasProcessed = this.conversationalTurnsManager?.processResponse(
+                  assistantMessageContent ?? null,
                   response.compliance_violations,
-                  false,
-                  assistantToolCalls
+                  assistantToolCalls,
+                  apiTurns // Pass API-provided turns
               );
+              
+              console.log('[Chat] Conversational turns processed:', wasProcessed);
+              
+              // Always emit messageComplete event regardless of whether turns were processed
+              if (this.eventEmitter) {
+                this.eventEmitter('messageComplete', {
+                  conversationId: `regular_${Date.now()}`,
+                  messageType: 'regular',
+                  content: assistantMessageContent ?? '',
+                  ...(assistantToolCalls && assistantToolCalls.length > 0 && { toolCalls: assistantToolCalls }),
+                  ...(assistantMessage?.image_prompt && { imagePrompt: assistantMessage.image_prompt })
+                });
+              }
+              
+              // Only add to history directly if not processed by conversational turns
+              if (!wasProcessed) {
+                  // Use addAssistantResponseToHistory to handle cleaning/trimming and check compliance
+                  console.log('[Chat] Using normal processing for non-streaming');
+                  this.addAssistantResponseToHistory(
+                      assistantMessageContent ?? null, // Pass null if content is undefined
+                      response.compliance_violations,
+                      assistantToolCalls
+                  );
+              }
+              
+              // Handle automatic follow-up if next is true
+              if (hasNext) {
+                  console.log('[Chat] Auto-sending follow-up request due to next=true');
+                  this.sendFollowUpRequest();
+              }
           }
           // Trimming is handled within addMessageToHistory
       }
@@ -521,25 +748,48 @@ export class ChatModule {
   }
 
   /**
-   * Sends a single user message and gets a response, automatically handling
-   * history and the configured system message.
-   * Sends a single user message. If the Observer is connected, it sends the message
-   * via the LiveKit data channel. Otherwise, it sends the message via the standard
-   * Animus API HTTP request and returns the completion response.
+   * Sends a user message and processes the AI response through events.
+   * This method no longer returns a Promise, and instead emits events for all response handling.
    *
-   * @param messageContent - The content of the user's message.
-   * @param options - Optional: Overrides for completion parameters (model, temperature, etc.)
-   *                  when falling back to the HTTP API. Cannot override `messages` or `stream`.
-   * @returns A Promise resolving to `void` if sent via Observer, or `ChatCompletionResponse` if sent via HTTP API.
+   * Events:
+   * - messageStart: When message processing begins
+   * - messageTokens: For each token in streaming responses
+   * - messageProgress: For partial responses in conversational turns
+   * - messageComplete: When the full response is available
+   * - messageError: If an error occurs
    *
-   * Note: When a user message is sent, it also resets the inactivity timer for the observer.
+   * @param messageContent - The content of the user's message
+   * @param options - Optional overrides for completion parameters
    */
-  // Return type matches completions now
-  // Allow 'stream' and 'reasoning' options
-  public async send(
+  public send(
       messageContent: string,
-      options?: Omit<ChatCompletionRequest, 'messages' | 'model'> & { model?: string } // Type includes all ChatCompletionRequest properties except messages and model
-  ): Promise<ChatCompletionResponse | AsyncIterable<ChatCompletionChunk>> {
+      options?: Omit<ChatCompletionRequest, 'messages' | 'model'> & { model?: string }
+  ): void {
+      // Generate a unique conversation ID
+      const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      
+      // Cancel any pending conversational turns when a new message is sent
+      if (this.conversationalTurnsManager?.isActive()) {
+          const canceledCount = this.conversationalTurnsManager.cancelPendingMessages();
+          if (canceledCount > 0) {
+              console.log(`[Chat] Canceled ${canceledCount} pending conversational turns due to new message`);
+          }
+      }
+      
+      // Clear any pending follow-up requests when a new message is sent
+      if (this.pendingFollowUpRequest) {
+          console.log('[Chat] Clearing pending follow-up request due to new message');
+          this.pendingFollowUpRequest = false;
+      }
+      
+      // Emit the messageStart event
+      if (this.eventEmitter) {
+          this.eventEmitter('messageStart', {
+            conversationId,
+            messageType: 'regular',
+            content: messageContent
+          });
+      }
       
       // Add timestamp to user message
       const timestamp = new Date().toISOString();
@@ -549,11 +799,19 @@ export class ChatModule {
         timestamp: timestamp
       };
 
-      // Ensure chat config exists (needed for both paths now)
+      // Ensure chat config exists
       if (!this.config || !this.systemMessage) {
-          throw new Error('Chat options (model, systemMessage) must be configured in AnimusClient to use chat.send().');
+          const errorMsg = 'Chat options (model, systemMessage) must be configured in AnimusClient to use chat.send()';
+          console.error(errorMsg);
+          if (this.eventEmitter) {
+              this.eventEmitter('messageError', { error: errorMsg });
+          }
+          return;
       }
-
+      
+      // Add message to history - will be done later in the async function
+      // to avoid duplicate messages in the completions payload
+      
       // --- Prepare HTTP API Request ---
       const defaults = this.config;
       const requestOptions = options || {};
@@ -573,14 +831,22 @@ export class ChatModule {
           min_p: requestOptions.min_p ?? defaults.min_p,
           length_penalty: requestOptions.length_penalty ?? defaults.length_penalty,
           compliance: requestOptions.compliance ?? defaults.compliance ?? true,
-          // Use stream from options if provided, otherwise use config default
-          stream: options?.stream ?? defaults.stream ?? false,
+          // Pass through autoTurn from options if provided, else from config
+          // Convert to boolean for API - enabled if truthy (boolean true or object with enabled: true)
+          autoTurn: this.getAutoTurnEnabled(requestOptions.autoTurn ?? defaults.autoTurn ?? false),
+          // Use stream from options/config, but override to false if autoTurn is enabled (backend requirement)
+          // For send() method, default to true for backward compatibility unless autoTurn is enabled
+          stream: this.getAutoTurnEnabled(requestOptions.autoTurn ?? defaults.autoTurn ?? false) ? false : (requestOptions.stream ?? true),
           // Pass through tools from options if provided, else from config
           tools: requestOptions.tools ?? defaults.tools,
           // Pass through check_image_generation
           check_image_generation: requestOptions.check_image_generation,
-          // tool_choice is set by `completions` method based on presence of tools
       };
+      
+      // Store request parameters for follow-up requests (excluding messages)
+      this.lastRequestParameters = { ...completionRequest };
+      delete this.lastRequestParameters.messages; // Don't store messages as they'll be rebuilt
+      
       // Remove undefined values
       Object.keys(completionRequest).forEach(key => {
           if ((completionRequest as any)[key] === undefined) {
@@ -588,28 +854,365 @@ export class ChatModule {
           }
       });
       
-      // Add reasoning parameters if enabled in config or request options
-      // This enables the model to show its reasoning process in the response
-      // When reasoning is true, the API includes reasoning content in the response
-      // For streaming, the reasoning content comes as part of the normal content stream
       const reasoningEnabled = 'reasoning' in requestOptions ? requestOptions.reasoning : defaults.reasoning;
       if (reasoningEnabled) {
           (completionRequest as Record<string, any>).reasoning = true;
           (completionRequest as Record<string, any>).show_reasoning = true;
       }
-      // --- End Prepare HTTP API Request ---
-
-
-      // --- NOT sending to Observer right now ---
-      // Per the updated documentation, we now only send to observer
-      // when we get a response from the AI, not when sending a user message
       
-      // Note: User activity reset is now only done when we receive a response
-      // from the AI, not when sending a message
+      // Process the completion in a non-blocking way using async IIFE
+      (async () => {
+          try {
+              // Prepare request with system message and history
+              const messagesToSend = [this.systemMessage!]; // Non-null assertion (we checked above)
+              
+              // Add history if applicable
+              const historySize = this.config?.historySize ?? 0;
+              if (historySize > 0 && this.chatHistory.length > 0) {
+                  // Calculate available slots for history
+                  const availableSlots = historySize - 1; // Reserve one slot for the new user message
+                  if (availableSlots > 0) {
+                      const historyCount = Math.min(this.chatHistory.length, availableSlots);
+                      const historyMessages = this.chatHistory.slice(-historyCount);
+                      
+                      // Reconstruct grouped messages for API requests
+                      const reconstructedHistory = this.reconstructGroupedMessages(historyMessages);
+                      messagesToSend.push(...reconstructedHistory);
+                  }
+              }
+              
+              // Add the user message
+              messagesToSend.push(userMessage);
+              
+              // Update the messages in the request
+              completionRequest.messages = messagesToSend;
+              
+              // NOW add the message to history AFTER we've prepared the API request
+              // This avoids duplicate messages in the completions payload
+              // Skip adding [CONTINUE] messages to history
+              if (userMessage.content !== '[CONTINUE]') {
+                  this.addMessageToHistory(userMessage);
+              } else {
+                  console.log('[Chat] Skipping [CONTINUE] message from history');
+              }
+              
+              // Make the API request directly (don't use completions to avoid Promise return)
+              console.log('[Animus SDK] Sending event-driven request');
+              const isStreaming = completionRequest.stream ?? false;
+              const response = isStreaming
+                  ? await this.requestUtil.request('POST', '/chat/completions', completionRequest, true)
+                  : await this.requestUtil.request('POST', '/chat/completions', completionRequest, false);
+              
+              if (isStreaming) {
+                  // Handle streaming response
+                  if (!response.body) {
+                      throw new Error('Streaming response body is null');
+                  }
+                  
+                  // Process the stream and emit events
+                  const reader = response.body.getReader();
+                  const decoder = new TextDecoder();
+                  let accumulatedContent: string | null = '';
+                  let accumulatedToolCalls: ToolCall[] = [];
+                  let complianceViolations: string[] | undefined;
+                  let accumulatedTurns: string[] | undefined;
+                  let hasNext: boolean | undefined;
+                  let buffer = '';
+              
+              try {
+                  while (true) {
+                      const { done, value } = await reader.read();
+                      if (done) {
+                          // Stream ended without [DONE] marker
+                          if (accumulatedContent || accumulatedToolCalls.length > 0) {
+                              // Emit final message complete event
+                              if (this.eventEmitter) {
+                                  this.eventEmitter('messageComplete', {
+                                      content: accumulatedContent || '', 
+                                      ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
+                                  });
+                              }
+                              
+                              // Add to history if not already processed by turns manager
+                              this.addAssistantResponseToHistory(
+                                  accumulatedContent,
+                                  complianceViolations,
+                                  accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                              );
+                          }
+                          break;
+                      }
+                      
+                      buffer += decoder.decode(value, { stream: true });
+                      const lines = buffer.split('\n');
+                      buffer = lines.pop() || '';
+                      
+                      for (const line of lines) {
+                          if (line.trim() === '') continue;
+                          
+                          if (line.startsWith('data: ')) {
+                              const data = line.substring(6).trim();
+                              if (data === '[DONE]') {
+                                  // Stream complete
+                                  // Try conversational turns first
+                                  if (this.conversationalTurnsManager) {
+                                      console.log('[Chat] Stream complete, attempting to process with conversational turns');
+                                      const wasProcessed = this.conversationalTurnsManager.processResponse(
+                                          accumulatedContent,
+                                          complianceViolations,
+                                          accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                                          accumulatedTurns
+                                      );
+                                      
+                                      console.log('[Chat] Was processed by conversational turns:', wasProcessed);
+                                      
+                                      // Always emit messageComplete regardless of whether it was processed by turns
+                                      if (this.eventEmitter) {
+                                          this.eventEmitter('messageComplete', {
+                                              content: accumulatedContent || '',
+                                              ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
+                                          });
+                                      }
+                                      
+                                      // Only add to history directly if not processed by turns manager
+                                      if (!wasProcessed) {
+                                          
+                                          this.addAssistantResponseToHistory(
+                                              accumulatedContent,
+                                              complianceViolations,
+                                              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                                          );
+                                      }
+                                  } else {
+                                      // No conversational turns manager
+                                      if (this.eventEmitter) {
+                                          this.eventEmitter('messageComplete', {
+                                              content: accumulatedContent || '',
+                                              ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
+                                          });
+                                      }
+                                      
+                                      this.addAssistantResponseToHistory(
+                                          accumulatedContent,
+                                          complianceViolations,
+                                          accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                                      );
+                                  }
+                                  
+                                  // Handle automatic follow-up if next is true
+                                  if (hasNext) {
+                                      console.log('[Chat] Auto-sending follow-up request due to next=true (send method)');
+                                      this.sendFollowUpRequest();
+                                  }
+                                  
+                                  return;
+                              }
+                              
+                              try {
+                                  const chunk = JSON.parse(data) as ChatCompletionChunk;
+                                  const choice = chunk.choices?.[0];
+                                  
+                                  if (choice) {
+                                      const delta = choice.delta;
+                                      
+                                      if (delta) {
+                                          if (delta.content) {
+                                              if (accumulatedContent === null) accumulatedContent = "";
+                                              accumulatedContent += delta.content;
+                                              
+                                              // Emit token event
+                                              if (this.eventEmitter) {
+                                                  this.eventEmitter('messageTokens', { content: delta.content });
+                                              }
+                                              
+                                              // Emit progress periodically
+                                              if (this.eventEmitter && accumulatedContent.length % 20 === 0) {
+                                                  this.eventEmitter('messageProgress', {
+                                                      content: accumulatedContent,
+                                                      isComplete: false
+                                                  });
+                                              }
+                                          }
+                                          
+                                          if (delta.tool_calls) {
+                                              delta.tool_calls.forEach(tcDelta => {
+                                                  const { index, ...toolCallData } = tcDelta;
+                                                  
+                                                  while (accumulatedToolCalls.length <= index) {
+                                                      accumulatedToolCalls.push({
+                                                          id: `temp_id_${accumulatedToolCalls.length}`,
+                                                          type: "function",
+                                                          function: { name: "", arguments: "" }
+                                                      });
+                                                  }
+                                                  
+                                                  const targetCall = accumulatedToolCalls[index]!;
+                                                  
+                                                  if (toolCallData.id) {
+                                                      targetCall.id = toolCallData.id;
+                                                  }
+                                                  if (toolCallData.type) {
+                                                      targetCall.type = toolCallData.type;
+                                                  }
+                                                  
+                                                  if (toolCallData.function) {
+                                                      if (!targetCall.function) {
+                                                          targetCall.function = { name: "", arguments: "" };
+                                                      }
+                                                      if (toolCallData.function.name) {
+                                                          targetCall.function.name = toolCallData.function.name;
+                                                      }
+                                                      if (toolCallData.function.arguments) {
+                                                          targetCall.function.arguments += toolCallData.function.arguments;
+                                                      }
+                                                  }
+                                              });
+                                          }
+                                          
+                                          // Accumulate turns and next fields from autoTurn feature
+                                          if (delta.turns) {
+                                              accumulatedTurns = delta.turns;
+                                          }
+                                          if (delta.next !== undefined) {
+                                              hasNext = delta.next;
+                                          }
+                                      }
+                                  }
+                                  
+                                  // Check for compliance violations
+                                  if (chunk.compliance_violations) {
+                                      complianceViolations = chunk.compliance_violations;
+                                      
+                                      if (this.eventEmitter && complianceViolations.length > 0) {
+                                          this.eventEmitter('messageError', { 
+                                              error: `Compliance violations: ${complianceViolations.join(', ')}`
+                                          });
+                                      }
+                                  }
+                              } catch (e) {
+                                  console.error('[Animus SDK] Failed to parse stream chunk:', data, e);
+                                  if (this.eventEmitter) {
+                                      this.eventEmitter('messageError', { 
+                                          error: `Failed to parse stream chunk: ${e instanceof Error ? e.message : String(e)}`
+                                      });
+                                  }
+                              }
+                          }
+                      }
+                  }
+              } catch (error) {
+                  console.error('[Animus SDK] Error processing stream:', error);
+                  
+                  // Emit error event
+                  if (this.eventEmitter) {
+                      this.eventEmitter('messageError', { 
+                          error: error instanceof Error ? error : String(error)
+                      });
+                  }
+              } finally {
+                  reader.releaseLock();
+              }
+              } else {
+                  // Handle non-streaming response (for autoTurn)
+                  // RequestUtil already parsed the JSON for non-streaming requests
+                  const jsonResponse = response as ChatCompletionResponse;
+                  
+                  console.log('[Chat] Non-streaming response, processing with conversational turns');
+                  console.log('[Chat] Has conversational turns manager:', !!this.conversationalTurnsManager);
+                  
+                  const choice = jsonResponse.choices?.[0];
+                  if (choice?.message) {
+                      const message = choice.message;
+                      const content = message.content;
+                      const toolCalls = message.tool_calls;
+                      const turns = message.turns;
+                      const next = message.next;
+                      const imagePrompt = message.image_prompt;
+                      
+                      console.log('[Chat] Response content:', content);
+                      console.log('[Chat] API turns:', turns?.length || 0, 'turns');
+                      console.log('[Chat] Has next:', next);
+                      console.log('[Chat] Has image prompt:', !!imagePrompt);
+                      
+                      // Handle conversational turns if available
+                      let turnsProcessed = false;
+                      if (this.conversationalTurnsManager && turns && turns.length > 0) {
+                          console.log('[ConversationalTurns] Using API-provided turns:', turns.length, 'turns');
+                          turnsProcessed = this.conversationalTurnsManager.processResponse(
+                              content,
+                              jsonResponse.compliance_violations,
+                              toolCalls,
+                              turns
+                          );
+                      }
+                      
+                      console.log('[Chat] Conversational turns processed:', turnsProcessed);
+                      
+                      if (!turnsProcessed) {
+                          console.log('[Chat] Using normal processing for non-streaming');
+                          // Emit message complete event
+                          if (this.eventEmitter) {
+                              this.eventEmitter('messageComplete', {
+                                  content: content || '',
+                                  ...(toolCalls && { toolCalls }),
+                                  ...(imagePrompt && { imagePrompt })
+                              });
+                          }
+                          
+                          // Add to history
+                          this.addAssistantResponseToHistory(
+                              content,
+                              jsonResponse.compliance_violations,
+                              toolCalls
+                          );
+                      }
+                      
+                      // Always handle image generation immediately when we have an image prompt
+                      // This ensures images are generated regardless of conversational turns
+                      if (imagePrompt) {
+                          console.log('[Chat] Generating image immediately');
+                          this.generateImageAndHandleNext(imagePrompt, next);
+                      } else if (next) {
+                          if (turnsProcessed) {
+                              // If turns were processed, store the follow-up request for later
+                              console.log('[Chat] Storing follow-up request for after turns complete');
+                              this.pendingFollowUpRequest = true;
+                          } else {
+                              // Handle follow-up immediately if no turns were processed
+                              console.log('[Chat] Sending follow-up request immediately (no turns, no image)');
+                              this.sendFollowUpRequest();
+                          }
+                      }
+                  }
+              }
+              
+          } catch (error) {
+              console.error("[Animus SDK] Error in event-driven send:", error);
+              
+              // Emit error event
+              if (this.eventEmitter) {
+                  this.eventEmitter('messageError', { 
+                      error: error instanceof Error ? error : String(error) 
+                  });
+              }
+          }
+      })();
+      
+      // No return value - all responses handled through events
+  }
 
-      // 2. Call main completions method for the HTTP request (handles history update internally)
-      // This is the primary return value (either response or stream)
-      return this.completions(completionRequest);
+  /**
+   * Helper method to emit message complete events
+   * @param content The complete message content
+   * @param toolCalls Any tool calls in the message
+   */
+  private emitMessageComplete(content: string | null, toolCalls?: ToolCall[]): void {
+      if (!this.eventEmitter) return;
+      
+      this.eventEmitter('messageComplete', {
+          content: content || '',
+          ...(toolCalls && toolCalls.length > 0 && { toolCalls })
+      });
   }
 
   /**
@@ -620,6 +1223,12 @@ export class ChatModule {
   private addMessageToHistory(message: ChatMessage | null): void {
       // Skip null/undefined messages or in no-history mode
       if (!message || !this.config || !this.config.historySize || this.config.historySize <= 0) return;
+      
+      // Skip continuation messages from being added to history
+      if (message.role === 'user' && message.content === '[CONTINUE]') {
+          console.log("[Animus SDK] Skipping continuation message from history");
+          return;
+      }
   
       // Ensure message has a timestamp
       if (!message.timestamp) {
@@ -693,19 +1302,18 @@ export class ChatModule {
     * Public method called by AnimusClient to add a completed assistant response to history.
     * @param assistantContent The full, raw content of the assistant's response.
     * @param compliance_violations Optional array of compliance violations detected in the response.
-    * @param isFromObserver Optional flag indicating if this message came from the observer (default: false)
     * @param tool_calls Optional array of tool calls made by the assistant.
     */
    public addAssistantResponseToHistory(
        assistantContent: string | null, // Can be null if only tool_calls are present
        compliance_violations?: string[] | null,
-       isFromObserver: boolean = false,
-       tool_calls?: ToolCall[]
+       tool_calls?: ToolCall[],
+       groupMetadata?: GroupMetadata
    ): void {
-       // If compliance violations exist, log and do not add to history
+       // If compliance violations exist, log but still add to history for context
+       // The conversation needs context even if content has violations
        if (compliance_violations && compliance_violations.length > 0) {
-           console.warn(`[Animus SDK] Assistant response not added to history due to compliance violations: ${compliance_violations.join(', ')}`);
-           return;
+           console.warn(`[Animus SDK] Assistant response has compliance violations but adding to history for context: ${compliance_violations.join(', ')}`);
        }
 
        // Don't add empty responses if there's no content AND no tool_calls
@@ -715,31 +1323,30 @@ export class ChatModule {
        }
 
 
-       const timestamp = new Date().toISOString();
+       // Use processedTimestamp from group metadata if available (for conversational turns),
+       // otherwise use current timestamp
+       const timestamp = groupMetadata?.processedTimestamp
+           ? new Date(groupMetadata.processedTimestamp).toISOString()
+           : new Date().toISOString();
+           
        const assistantMessage: ChatMessage = {
            role: 'assistant',
            content: assistantContent, // Will be null if no text content
            timestamp: timestamp,
-           // Add name property to track source if from observer
-           ...(isFromObserver && { name: 'observer_proactive' }),
-           ...(tool_calls && tool_calls.length > 0 && { tool_calls: tool_calls })
+           ...(tool_calls && tool_calls.length > 0 && { tool_calls: tool_calls }),
+           ...(compliance_violations && compliance_violations.length > 0 && { compliance_violations }),
+           // Add group metadata if provided
+           ...(groupMetadata?.groupId && {
+               groupId: groupMetadata.groupId,
+               messageIndex: groupMetadata.messageIndex,
+               totalInGroup: groupMetadata.totalInGroup
+           })
        };
        this.addMessageToHistory(assistantMessage);
        
-       // Reset user activity when assistant message is added
-       if (this.resetUserActivity) {
-           this.resetUserActivity();
-       }
-       
-       // SEND TO OBSERVER: Only when receiving a response from the actual Animus AI,
-       // not when processing messages from the observer itself
-       if (!isFromObserver) {
-           this.sendHistoryToObserver();
-       }
    }
 
    /**
-
     * Returns a copy of the current chat history.
     * @returns A copy of the chat history array
     */
@@ -819,7 +1426,7 @@ export class ChatModule {
        // We use a non-null assertion (!) here since we already checked index validity
        const currentMessage = this.chatHistory[index]!;
 
-       // Allow updating user, assistant, or tool messages (not system or observer)
+       // Allow updating user, assistant, or tool messages (not system)
        if (currentMessage.role !== 'user' && currentMessage.role !== 'assistant' && currentMessage.role !== 'tool') {
            console.error(`[Animus SDK] Cannot update message with role: ${currentMessage.role}`);
            return false;
@@ -934,76 +1541,316 @@ export class ChatModule {
        this.chatHistory.splice(index, 1);
        return true;
    }
+   
+   /**
+    * Cancels any pending conversational turns
+    * @returns The number of turns that were canceled
+    */
+   public cancelPendingTurns(): number {
+       if (!this.conversationalTurnsManager) {
+           console.log('[Chat] No conversational turns manager available, nothing to cancel');
+           return 0;
+       }
+       
+       return this.conversationalTurnsManager.cancelPendingMessages();
+   }
 
    /**
     * Clears the entire chat history.
     * This will remove all user and assistant messages, but won't affect the system message.
-    *
     * @returns The number of messages that were cleared
     */
    public clearChatHistory(): number {
-       const clearedCount = this.chatHistory.length;
+       const count = this.chatHistory.length;
        this.chatHistory = [];
-       return clearedCount;
+       return count;
+   }
+
+   
+   /**
+    * Reconstructs grouped messages back into their original form for API requests
+    * @param messages Array of messages that may contain grouped messages
+    * @returns Array of messages with grouped messages reconstructed
+    */
+   private reconstructGroupedMessages(messages: ChatMessage[]): ChatMessage[] {
+       const result: ChatMessage[] = [];
+       const groupMap = new Map<string, ChatMessage[]>();
+       
+       // First pass: collect grouped messages
+       for (const message of messages) {
+           if (message.groupId && message.messageIndex !== undefined && message.totalInGroup !== undefined) {
+               if (!groupMap.has(message.groupId)) {
+                   groupMap.set(message.groupId, []);
+               }
+               groupMap.get(message.groupId)!.push(message);
+           } else {
+               // Non-grouped message, add directly
+               result.push(message);
+           }
+       }
+       
+       // Second pass: reconstruct grouped messages
+       for (const [groupId, groupMessages] of groupMap.entries()) {
+           // Sort by messageIndex to ensure correct order
+           groupMessages.sort((a, b) => (a.messageIndex || 0) - (b.messageIndex || 0));
+           
+           // Create a single reconstructed message from the group
+           const firstMessage = groupMessages[0];
+           if (!firstMessage) continue; // Skip if no messages in group
+           
+           const reconstructedContent = groupMessages.map(msg => msg.content).join(' ');
+           const lastMessage = groupMessages[groupMessages.length - 1];
+           
+           const reconstructedMessage: ChatMessage = {
+               role: firstMessage.role,
+               content: reconstructedContent,
+               timestamp: firstMessage.timestamp,
+               // Include other properties from the first message but remove group metadata
+               ...(firstMessage.name && { name: firstMessage.name }),
+               ...(firstMessage.reasoning && { reasoning: firstMessage.reasoning }),
+               // Include compliance violations from the last message (as they apply to the full response)
+               ...(lastMessage?.compliance_violations && {
+                   compliance_violations: lastMessage.compliance_violations
+               }),
+               // Only include tool_calls from the last message in the group (as per original logic)
+               ...(lastMessage?.tool_calls && {
+                   tool_calls: lastMessage.tool_calls
+               })
+           };
+           
+           result.push(reconstructedMessage);
+       }
+       
+       return result;
    }
    
    /**
-    * Sends the current chat history to the observer.
-    * This should only be called after we've received a response from the AI.
-    * The observer agent will analyze the conversation to decide whether to send a proactive message.
+    * Handle post-response actions (image generation and follow-up) when no conversational turns are involved
+    * @param imagePrompt Optional image prompt to generate
+    * @param next Whether to send a follow-up request
     */
-   private sendHistoryToObserver(): void {
-       // Only proceed if observer functions are available and connected
-       if (!this.isObserverConnected || !this.sendObserverText) {
-           return;
+   private handlePostResponseActions(imagePrompt?: string, next?: boolean): void {
+       if (imagePrompt) {
+           console.log('[Chat] Generating image immediately (no turns)');
+           this.generateImageAndHandleNext(imagePrompt, next);
+       } else if (next) {
+           console.log('[Chat] Sending follow-up request immediately (no turns, no image)');
+           this.sendFollowUpRequest();
        }
+   }
+
+
+   /**
+    * Generate an image and handle follow-up request after completion
+    * @param imagePrompt The image prompt to generate
+    * @param next Whether to send a follow-up request after image generation
+    */
+   private generateImageAndHandleNext(imagePrompt: string, next?: boolean): void {
+       console.log('[Chat] Starting image generation for prompt:', imagePrompt);
        
-       if (!this.isObserverConnected()) {
-           return;
+       // Emit image generation start event
+       if (this.eventEmitter) {
+           this.eventEmitter('imageGenerationStart', {
+               prompt: imagePrompt
+           });
        }
-       
+
+       // If we have access to the generateImage method, use it and wait for completion
+       if (this.generateImage) {
+           this.generateImage(imagePrompt)
+               .then((imageUrl: string) => {
+                   console.log('[Chat] Image generation completed:', imageUrl);
+                   
+                   // Emit image generation complete event
+                   if (this.eventEmitter) {
+                       this.eventEmitter('imageGenerationComplete', {
+                           prompt: imagePrompt,
+                           imageUrl: imageUrl
+                       });
+                   }
+                   
+                   if (next) {
+                       console.log('[Chat] Sending follow-up request after image completion');
+                       this.sendFollowUpRequest();
+                   }
+               })
+               .catch((error: any) => {
+                   console.error('[Chat] Image generation failed:', error);
+                   
+                   // Emit image generation error event
+                   if (this.eventEmitter) {
+                       this.eventEmitter('imageGenerationError', {
+                           prompt: imagePrompt,
+                           error: error
+                       });
+                   }
+                   
+                   if (next) {
+                       console.log('[Chat] Sending follow-up request despite image failure');
+                       this.sendFollowUpRequest();
+                   }
+               });
+       } else {
+           // If no image generation method available, emit error and handle follow-up
+           console.log('[Chat] No image generation method available');
+           
+           if (this.eventEmitter) {
+               this.eventEmitter('imageGenerationError', {
+                   prompt: imagePrompt,
+                   error: 'Image generation method not available'
+               });
+           }
+           
+           if (next) {
+               // Add a delay to allow UI to handle the error
+               setTimeout(() => {
+                   console.log('[Chat] Sending follow-up request after image generation unavailable');
+                   this.sendFollowUpRequest();
+               }, 1000); // 1 second delay
+           }
+       }
+   }
+
+   /**
+    * Send an automatic follow-up request when the API indicates more content is expected
+    * This is called when the response has next=true
+    */
+   private sendFollowUpRequest(): void {
+       // Use a short delay to make the follow-up feel natural
+       setTimeout(() => {
+           console.log('[Chat] Sending automatic follow-up request');
+           this.makeFollowUpApiRequest();
+       }, 1000); // 1 second delay to feel natural
+   }
+
+   /**
+    * Make a follow-up API request without adding any user message
+    * This continues the conversation naturally with the existing history
+    */
+   private async makeFollowUpApiRequest(): Promise<void> {
        try {
-           // Prepare the messages for the observer including the system message
+           console.log('[Chat] Making follow-up API request with current history');
+           
+           // Prepare the API request with current history (no new user message)
+           const messagesToSend = [this.systemMessage!];
+           
+           // Add history if applicable
            const historySize = this.config?.historySize ?? 0;
-           let observerMessages: ChatMessage[] = [];
-           
-           // Add system message if available
-           if (this.systemMessage) {
-               observerMessages.push(this.systemMessage);
-           }
-           
-           // Add chat history with timestamps
            if (historySize > 0 && this.chatHistory.length > 0) {
-               const messagesToSend = this.chatHistory.map(msg => {
-                   // Ensure each message has a timestamp
-                   const msgTimestamp = msg.timestamp || new Date().toISOString();
-                   
-                   // Format message with timestamp if not already formatted
-                   const hasTimestamp = typeof msg.content === 'string' &&
-                                      msg.content.match(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-                   
-                   return {
-                       role: msg.role,
-                       content: hasTimestamp ? msg.content : `[${msgTimestamp}]: ${msg.content}`,
-                       ...(msg.name && { name: msg.name })
-                   };
-               });
-               
-               observerMessages.push(...messagesToSend);
+               const historyCount = Math.min(this.chatHistory.length, historySize);
+               const historyMessages = this.chatHistory.slice(-historyCount);
+               const reconstructedHistory = this.reconstructGroupedMessages(historyMessages);
+               messagesToSend.push(...reconstructedHistory);
            }
            
-           // Only send if we have messages to send
-           if (observerMessages.length > 0) {
-               const observerPayload: Record<string, any> = { messages: observerMessages };
-               
-               // Send to observer
-               console.log('[Animus SDK] Sending history to observer after AI response');
-               this.sendObserverText(JSON.stringify(observerPayload)).catch(error => {
-                   console.error("[Animus SDK] Observer history send failed:", error.message);
+           // Create the completion request using stored parameters from the original request
+           const completionRequest: any = {
+               messages: messagesToSend,
+               // Use all parameters from the last request to maintain consistency
+               ...(this.lastRequestParameters || {}),
+               // Override specific parameters for follow-up requests
+               max_tokens: Math.min(this.lastRequestParameters?.max_tokens || 150, 150), // Limit follow-up tokens
+               stream: false // Always use non-streaming for follow-ups
+           };
+           
+           // Remove undefined values
+           Object.keys(completionRequest).forEach(key => {
+               if (completionRequest[key] === undefined) {
+                   delete completionRequest[key];
+               }
+           });
+           
+           console.log('[Chat] Follow-up API request prepared');
+           
+           // Emit messageStart event for follow-up request
+           if (this.eventEmitter) {
+               this.eventEmitter('messageStart', {
+                   conversationId: `followup_${Date.now()}`,
+                   messageType: 'followup',
+                   content: '' // Follow-up requests don't have user content
                });
            }
+           
+           // Make the API request
+           const response = await this.requestUtil.request('POST', '/chat/completions', completionRequest, false);
+           const jsonResponse = response as any;
+           
+           console.log('[Chat] Follow-up response received');
+           
+           // Process the response the same way as normal responses
+           const choice = jsonResponse.choices?.[0];
+           if (choice?.message) {
+               const message = choice.message;
+               const content = message.content;
+               const toolCalls = message.tool_calls;
+               const turns = message.turns;
+               const next = message.next;
+               const imagePrompt = message.image_prompt;
+               
+               console.log('[Chat] Follow-up response content:', content);
+               console.log('[Chat] Follow-up API turns:', turns?.length || 0, 'turns');
+               console.log('[Chat] Follow-up has next:', next);
+               console.log('[Chat] Follow-up has image prompt:', !!imagePrompt);
+               
+               // Handle conversational turns if available
+               let turnsProcessed = false;
+               if (this.conversationalTurnsManager && turns && turns.length > 0) {
+                   console.log('[ConversationalTurns] Processing follow-up turns:', turns.length, 'turns');
+                   turnsProcessed = this.conversationalTurnsManager.processResponse(
+                       content,
+                       jsonResponse.compliance_violations,
+                       toolCalls,
+                       turns
+                   );
+               }
+               
+               if (!turnsProcessed) {
+                   console.log('[Chat] Using normal processing for follow-up');
+                   // Emit message complete event
+                   if (this.eventEmitter) {
+                       this.eventEmitter('messageComplete', {
+                           conversationId: `followup_${Date.now()}`,
+                           messageType: 'followup',
+                           content: content || '',
+                           ...(toolCalls && { toolCalls }),
+                           ...(imagePrompt && { imagePrompt })
+                       });
+                   }
+                   
+                   // Add to history
+                   this.addAssistantResponseToHistory(
+                       content,
+                       jsonResponse.compliance_violations,
+                       toolCalls
+                   );
+                   
+               }
+               
+               // Always handle image generation immediately when we have an image prompt
+               // This ensures images are generated regardless of conversational turns
+               if (imagePrompt) {
+                   console.log('[Chat] Generating image immediately (follow-up)');
+                   this.generateImageAndHandleNext(imagePrompt, next);
+               } else if (next) {
+                   if (turnsProcessed) {
+                       // If turns were processed, store the follow-up request for later
+                       console.log('[Chat] Storing follow-up request for after turns complete (follow-up)');
+                       this.pendingFollowUpRequest = true;
+                   } else {
+                       // Handle follow-up immediately if no turns were processed
+                       console.log('[Chat] Sending follow-up request immediately (follow-up, no turns, no image)');
+                       this.sendFollowUpRequest();
+                   }
+               }
+           }
+           
        } catch (error) {
-           console.error('[Animus SDK] Error preparing observer payload:', error);
+           console.error('[Chat] Error in follow-up request:', error);
+           if (this.eventEmitter) {
+               this.eventEmitter('messageError', {
+                   error: error instanceof Error ? error.message : String(error)
+               });
+           }
        }
    }
 }

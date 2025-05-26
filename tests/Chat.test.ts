@@ -37,10 +37,7 @@ describe('ChatModule', () => {
     // Default instantiation using mocks
     chatModule = new ChatModule(
         requestUtilMock,
-        defaultChatOptions,
-        mockIsObserverConnected,
-        mockSendObserverText,
-        mockResetUserActivity
+        defaultChatOptions
     );
   });
 
@@ -77,9 +74,7 @@ describe('ChatModule', () => {
             model: 'test-chat-model',
             systemMessage: 'Test system message',
             historySize: historySize // Enable history
-        },
-        mockIsObserverConnected,
-        mockSendObserverText
+        }
     );
 
     // Mock the raw Response for streaming
@@ -175,8 +170,8 @@ describe('ChatModule', () => {
 
     // 5. Verify assistant response added to history *after* stream consumption
     expect(addAssistantResponseSpy).toHaveBeenCalledTimes(1);
-    // Updated to include new default arguments for isFromObserver and tool_calls
-    expect(addAssistantResponseSpy).toHaveBeenCalledWith('Hello world!', undefined, false, undefined);
+    // Updated to include new default arguments for tool_calls
+    expect(addAssistantResponseSpy).toHaveBeenCalledWith('Hello world!', undefined, undefined);
 
     // 6. Verify final history state (addMessageToHistory handles trimming internally)
     // Access history AFTER spies have been checked
@@ -200,30 +195,47 @@ describe('ChatModule', () => {
           model: 'test-chat-model',
           systemMessage: 'System prompt.',
           historySize: 2 // Keep last 2 user/assistant messages
-        },
-        mockIsObserverConnected,
-        mockSendObserverText
+        }
     );
 
     const requestMock = vi.spyOn(requestUtilMock, 'request');
 
-    // Mock non-streaming responses
-    const mockResponse1: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'test-chat-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Response 1' }, finish_reason: 'stop' }] };
-    const mockResponse2: ChatCompletionResponse = { id: 'r2', object: 'chat.completion', created: 2, model: 'test-chat-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Response 2' }, finish_reason: 'stop' }] };
-    const mockResponse3: ChatCompletionResponse = { id: 'r3', object: 'chat.completion', created: 3, model: 'test-chat-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Response 3' }, finish_reason: 'stop' }] };
+    // Mock streaming responses since send() always uses streaming
+    const createMockStreamResponse = (content: string) => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        async start(controller) {
+          const encoder = new TextEncoder();
+          // Role chunk
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ id: 'chunk1', choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] })}\n\n`));
+          await new Promise(r => setTimeout(r, 1));
+          // Content chunk
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ id: 'chunk1', choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\n`));
+          await new Promise(r => setTimeout(r, 1));
+          // Done signal
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        }
+      }),
+      headers: new Headers({ 'Content-Type': 'text/event-stream' }),
+    } as Response);
 
     // Call 1
-    requestMock.mockResolvedValueOnce(mockResponse1);
+    requestMock.mockResolvedValueOnce(createMockStreamResponse('Response 1'));
     await chatModule.send('User message 1');
+    // Wait a bit for streaming to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
     expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', {
       model: 'test-chat-model',
       messages: [
         { role: 'system', content: 'System prompt.' },
         { role: 'user', content: 'User message 1', timestamp: expect.any(String) } // User message from send() has a timestamp
       ],
-      stream: false,
-      compliance: true
-    }, false);
+      stream: true, // send() always uses streaming
+      compliance: true,
+      autoTurn: false // Default autoTurn value
+    }, true); // send() always uses streaming
     // History should be: [User1, Assistant1]
     expect((chatModule as any).chatHistory).toEqual([
         { role: 'user', content: 'User message 1', timestamp: expect.any(String) },
@@ -231,20 +243,23 @@ describe('ChatModule', () => {
     ]);
 
     // Call 2
-    requestMock.mockResolvedValueOnce(mockResponse2);
+    requestMock.mockResolvedValueOnce(createMockStreamResponse('Response 2'));
     await chatModule.send('User message 2');
+    // Wait a bit for streaming to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
     // Expected Payload: System + History BEFORE User2 (User1, Assistant1) + User2
     // History before call: [User1, Assistant1]. historySize=2. Max past history = 2-1=1. Actual past = min(2,1)=1. History to add = [Assistant1].
-    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', {
+    expect(requestMock).toHaveBeenNthCalledWith(2, 'POST', '/chat/completions', {
       model: 'test-chat-model',
       messages: [
         { role: 'system', content: 'System prompt.' },
-        { role: 'assistant', content: 'Response 1' }, // Correct: Historical assistant messages DON'T have timestamps in the sent payload
+        { role: 'assistant', content: 'Response 1', timestamp: expect.any(String) }, // Historical assistant messages DO have timestamps in streaming
         { role: 'user', content: 'User message 2', timestamp: expect.any(String) } // User message from send() has a timestamp
       ],
-      stream: false,
-      compliance: true
-    }, false);
+      stream: true, // send() always uses streaming
+      compliance: true,
+      autoTurn: false // Default autoTurn value
+    }, true); // send() always uses streaming
      // Final History State Check: [User2, Assistant2] (This part remains correct)
      // Let's re-check Chat.ts logic... Ah, it adds User THEN Assistant, then trims.
      // After User2 added: [User1, Assistant1, User2]
@@ -257,20 +272,23 @@ describe('ChatModule', () => {
 
 
     // Call 3
-    requestMock.mockResolvedValueOnce(mockResponse3);
+    requestMock.mockResolvedValueOnce(createMockStreamResponse('Response 3'));
     await chatModule.send('User message 3');
+    // Wait a bit for streaming to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
      // Expected Payload: System + History BEFORE User3 (User2, Assistant2) + User3
      // History before call: [User2, Assistant2]. historySize=2. Max past history = 2-1=1. Actual past = min(2,1)=1. History to add = [Assistant2].
-    expect(requestMock).toHaveBeenCalledWith('POST', '/chat/completions', {
+    expect(requestMock).toHaveBeenNthCalledWith(3, 'POST', '/chat/completions', {
       model: 'test-chat-model',
       messages: [
         { role: 'system', content: 'System prompt.' },
-        { role: 'assistant', content: 'Response 2' }, // Correct: Historical assistant messages DON'T have timestamps
+        { role: 'assistant', content: 'Response 2', timestamp: expect.any(String) }, // Historical assistant messages DO have timestamps in streaming
         { role: 'user', content: 'User message 3', timestamp: expect.any(String) } // User message from send() has a timestamp
       ],
-      stream: false,
-      compliance: true
-    }, false);
+      stream: true, // send() always uses streaming
+      compliance: true,
+      autoTurn: false // Default autoTurn value
+    }, true); // send() always uses streaming
     // Final History State Check: [User3, Assistant3] (This part remains correct)
     expect((chatModule as any).chatHistory).toEqual([
         { role: 'user', content: 'User message 3', timestamp: expect.any(String) },
@@ -301,7 +319,7 @@ describe('ChatModule', () => {
       'POST',
       '/chat/completions',
       { // Not using expect.objectContaining for more precise matching
-        messages: [ 
+        messages: [
           { role: 'system', content: 'Test system message' },
           { role: 'user', content: 'Test' } // User message in .completions doesn't get auto-timestamped by ChatModule before this point
         ],
@@ -311,7 +329,8 @@ describe('ChatModule', () => {
         max_tokens: 50,
         stop: ['\n'],
         stream: false, // Default from ChatModule.completions
-        compliance: true // Default from ChatModule.completions
+        compliance: true, // Default from ChatModule.completions
+        autoTurn: false // Default autoTurn value
       },
       false // stream flag passed to requestUtil is correct
     );
@@ -333,7 +352,7 @@ describe('ChatModule', () => {
         historySize: 5,
         top_p: 0.8,
       };
-      chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
+      chatModule = new ChatModule(requestUtilMock, defaultOptions);
       const requestMock = vi.spyOn(requestUtilMock, 'request');
       const mockResponse: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'default-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Default response' }, finish_reason: 'stop' }] };
       requestMock.mockResolvedValue(mockResponse);
@@ -358,6 +377,7 @@ describe('ChatModule', () => {
           stream: false,
           compliance: false,
           top_p: 0.8,
+          autoTurn: false, // Default autoTurn value
         },
         false // stream flag to requestUtil
       );
@@ -373,7 +393,7 @@ describe('ChatModule', () => {
           // compliance defaults to true
           historySize: 3,
         };
-        chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
+        chatModule = new ChatModule(requestUtilMock, defaultOptions);
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         const mockResponse: ChatCompletionResponse = { id: 'r1', object: 'chat.completion', created: 1, model: 'default-model-send', choices: [{ index: 0, message: { role: 'assistant', content: 'Default send response' }, finish_reason: 'stop' }] };
         requestMock.mockResolvedValue(mockResponse);
@@ -392,17 +412,17 @@ describe('ChatModule', () => {
             temperature: 0.4,
             max_tokens: 99,
             compliance: true, // Check default is applied
-            stream: false, // Default stream is false in this test's config
+            stream: true, // send() always uses streaming
+            autoTurn: false, // Default autoTurn value
           }),
-          false // Default stream is false
+          true // send() always uses streaming
         );
-        expect(mockSendObserverText).not.toHaveBeenCalled(); // Verify observer not called
         requestMock.mockRestore();
       });
 
       it('should default compliance to true and return violations from response', async () => {
         // Instantiate without compliance in config
-        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system' }, mockIsObserverConnected, mockSendObserverText);
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system' });
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         // Mock response *with* violations
         const mockResponse: ChatCompletionResponse = {
@@ -445,7 +465,7 @@ describe('ChatModule', () => {
       });
 
       it('should send compliance: false when explicitly set in request', async () => {
-        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }, mockIsObserverConnected, mockSendObserverText); // Config defaults to true
+        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }); // Config defaults to true
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         // Mock response *without* violations (as compliance is off)
         const mockResponse: ChatCompletionResponse = {
@@ -486,39 +506,82 @@ describe('ChatModule', () => {
       });
 
       it('should send compliance: false when explicitly set in send options', async () => {
-        chatModule = new ChatModule(requestUtilMock, { model: 'test-model', systemMessage: 'Test system', compliance: true }, mockIsObserverConnected, mockSendObserverText); // Config defaults to true
-        const requestMock = vi.spyOn(requestUtilMock, 'request');
-        const mockResponse: ChatCompletionResponse = { id: 'r-comp-3', object: 'chat.completion', created: 1, model: 'test-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Send non-compliant' }, finish_reason: 'stop' }] };
-        requestMock.mockResolvedValue(mockResponse);
+        // Create a mock event emitter to capture events
+        const eventCallbacks: Record<string, any> = {};
+        const mockEventEmitter = vi.fn((event: string, data: any) => {
+          if (eventCallbacks[event]) {
+            eventCallbacks[event](data);
+          }
+        });
 
-        const response = await chatModule.send('Send with compliance off', { compliance: false }); // Disable via options
+        // Create a mock generateImage function
+        const mockGenerateImage = vi.fn().mockResolvedValue("mock-image-url");
+        
+        chatModule = new ChatModule(
+          requestUtilMock,
+          { model: 'test-model', systemMessage: 'Test system', compliance: true },
+          mockGenerateImage, // generateImage
+          mockEventEmitter // eventEmitter as last parameter
+        );
+
+        const requestMock = vi.spyOn(requestUtilMock, 'request');
+        const mockStreamResponse = {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            async start(controller) {
+              const encoder = new TextEncoder();
+              // Role chunk
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ id: 'chunk1', choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] })}\n\n`));
+              await new Promise(r => setTimeout(r, 1));
+              // Content chunk
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ id: 'chunk1', choices: [{ index: 0, delta: { content: 'Send non-compliant' }, finish_reason: null }] })}\n\n`));
+              await new Promise(r => setTimeout(r, 1));
+              // Done signal
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+            }
+          }),
+          headers: new Headers({ 'Content-Type': 'text/event-stream' }),
+        } as Response;
+        requestMock.mockResolvedValue(mockStreamResponse);
+
+        // Create a promise that will resolve when the messageComplete event fires
+        const responsePromise = new Promise<{content: string}>(resolve => {
+          eventCallbacks.messageComplete = resolve;
+        });
+
+        // Call send (doesn't return a response directly anymore)
+        chatModule.send('Send with compliance off', { compliance: false }); // Disable via options
+
+        // Wait for the messageComplete event
+        const eventData = await responsePromise;
 
         // 1. Check compliance: false was sent
         expect(requestMock).toHaveBeenCalledWith(
           'POST',
           '/chat/completions',
           expect.objectContaining({
-            messages: [
+            messages: expect.arrayContaining([
                 { role: 'system', content: 'Test system'},
-                { role: 'user', content: 'Send with compliance off', timestamp: expect.any(String)}
-            ],
+                expect.objectContaining({
+                  role: 'user',
+                  content: 'Send with compliance off',
+                  timestamp: expect.any(String)
+                })
+            ]),
             compliance: false, // Should be false as requested in options
-            stream: false, // Default stream is false
+            stream: true, // Always true for event-driven approach
+            autoTurn: false // Default autoTurn value
           }),
-          false // Default stream is false
+          true // Always true for event-driven approach
         );
 
-        // 2. Check the returned response does NOT include violations
-        // Check response type before accessing property
-        if (response && 'compliance_violations' in response) {
-             expect(response.compliance_violations).toBeUndefined();
-        } else {
-             // This case shouldn't happen if observer mock is false, but good practice
-             expect(response).toBeDefined(); // Ensure it's not void if HTTP path taken
-        }
+        // 2. Check the response content from the event
+        expect(eventData).toBeDefined();
+        expect(eventData.content).toBe('Send non-compliant');
 
         requestMock.mockRestore();
-        expect(mockSendObserverText).not.toHaveBeenCalled(); // Verify observer not called
       });
 
     it('should override configured defaults with completions request parameters', async () => {
@@ -530,7 +593,7 @@ describe('ChatModule', () => {
         compliance: true,
         top_p: 0.8,
       };
-      chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
+      chatModule = new ChatModule(requestUtilMock, defaultOptions);
       const requestMock = vi.spyOn(requestUtilMock, 'request');
       const mockResponse: ChatCompletionResponse = { id: 'r-override-1', object: 'chat.completion', created: 1, model: 'override-model', choices: [{ index: 0, message: { role: 'assistant', content: 'Override response' }, finish_reason: 'stop' }] };
       requestMock.mockResolvedValue(mockResponse);
@@ -572,9 +635,7 @@ it('should clean think tags and store reasoning when adding assistant message to
       // Initialize with history enabled
       chatModule = new ChatModule(
           requestUtilMock,
-          { model: 'test-model', systemMessage: 'Test', historySize: 5 },
-          mockIsObserverConnected,
-          mockSendObserverText
+          { model: 'test-model', systemMessage: 'Test', historySize: 5 }
       );
 
       const rawAssistantContent = '<think>This is reasoning.</think> This is the visible content.';
@@ -598,9 +659,7 @@ it('should clean think tags and store reasoning when adding assistant message to
     it('should handle assistant message with only think tags', () => {
         chatModule = new ChatModule(
             requestUtilMock,
-            { model: 'test-model', systemMessage: 'Test', historySize: 5 },
-            mockIsObserverConnected,
-            mockSendObserverText
+            { model: 'test-model', systemMessage: 'Test', historySize: 5 }
         );
         const rawAssistantContent = '<think>Only reasoning here.</think>';
         chatModule.addAssistantResponseToHistory(rawAssistantContent);
@@ -617,9 +676,7 @@ it('should clean think tags and store reasoning when adding assistant message to
     it('should handle assistant message with no think tags', () => {
         chatModule = new ChatModule(
             requestUtilMock,
-            { model: 'test-model', systemMessage: 'Test', historySize: 5 },
-            mockIsObserverConnected,
-            mockSendObserverText
+            { model: 'test-model', systemMessage: 'Test', historySize: 5 }
         );
         const rawAssistantContent = 'Just normal content.';
         chatModule.addAssistantResponseToHistory(rawAssistantContent);
@@ -636,9 +693,7 @@ it('should clean think tags and store reasoning when adding assistant message to
     it('should not add empty assistant message without reasoning to history', () => {
         chatModule = new ChatModule(
             requestUtilMock,
-            { model: 'test-model', systemMessage: 'Test', historySize: 5 },
-            mockIsObserverConnected,
-            mockSendObserverText
+            { model: 'test-model', systemMessage: 'Test', historySize: 5 }
         );
         const rawAssistantContent = '   '; // Whitespace only
         chatModule.addAssistantResponseToHistory(rawAssistantContent);
@@ -653,7 +708,7 @@ it('should clean think tags and store reasoning when adding assistant message to
           max_tokens: 99,
           compliance: true,
         };
-        chatModule = new ChatModule(requestUtilMock, defaultOptions, mockIsObserverConnected, mockSendObserverText);
+        chatModule = new ChatModule(requestUtilMock, defaultOptions);
         const requestMock = vi.spyOn(requestUtilMock, 'request');
         const mockResponse: ChatCompletionResponse = { id: 'r-override-2', object: 'chat.completion', created: 1, model: 'override-model-send', choices: [{ index: 0, message: { role: 'assistant', content: 'Override send response' }, finish_reason: 'stop' }] };
         requestMock.mockResolvedValue(mockResponse);
@@ -681,145 +736,13 @@ it('should clean think tags and store reasoning when adding assistant message to
             max_tokens: 200,
             compliance: false,
             top_p: 0.7,
-            stream: false // Check stream option passed correctly
+            stream: false, // stream: false was explicitly set in options
+            autoTurn: false // Default autoTurn value
           }),
-          false // stream flag to requestUtil
+          false // stream: false was explicitly set in options
         );
         expect(requestMock).toHaveBeenCalledTimes(1); // Verify HTTP call happened
-        expect(mockSendObserverText).not.toHaveBeenCalled(); // Verify observer not called
         requestMock.mockRestore(); // Restore the mock *after* asserting calls
-
-        // --- Add tests specifically for the Observer path ---
-        // --- Add tests specifically for the Observer path ---
-        describe('ChatModule - Observer Integration', () => {
-            // No need for a separate beforeEach here if the main one resets mocks correctly
-            // We just need to set the observer mock state for these specific tests
-
-            it('should call sendObserverText with correct history payload based on configured historySize', async () => {
-                // Arrange: Set up history and observer mock
-                mockIsObserverConnected.mockReturnValue(true);
-                const testHistorySize = 2; // Define history size for this test case
-                chatModule = new ChatModule( // Re-init with specific historySize
-                    requestUtilMock,
-                    { ...defaultChatOptions, historySize: testHistorySize }, // Use the variable
-                    mockIsObserverConnected,
-                    mockSendObserverText
-                );
-                // Pre-populate history with more messages than testHistorySize to test slicing
-                const fullHistory = [
-                    { role: 'user', content: 'User message 1', timestamp: 'ts1' },
-                    { role: 'assistant', content: 'Assistant message 1', timestamp: 'ts2' },
-                    { role: 'user', content: 'User message 2', timestamp: 'ts3' },
-                    { role: 'assistant', content: 'Assistant message 2', timestamp: 'ts4' } // 4 messages total
-                ];
-                (chatModule as any).chatHistory = fullHistory;
-
-                const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
-                const newUserMessage = 'Observer test message';
-
-                // Mock the HTTP response for the parallel completions call
-                const requestMock = vi.spyOn(requestUtilMock, 'request');
-                const mockHttpResponse: ChatCompletionResponse = { id: 'r-obs-1', object: 'chat.completion', created: 1, model: defaultChatOptions.model, choices: [{ index: 0, message: { role: 'assistant', content: 'HTTP Response' }, finish_reason: 'stop' }] };
-                requestMock.mockResolvedValue(mockHttpResponse); // Assume non-streaming for this test setup
-
-                // Act: Call send
-                const result = await chatModule.send(newUserMessage);
-
-                // Assert: Verify the observer was called
-                expect(mockSendObserverText).toHaveBeenCalledTimes(1);
-                
-                // Assert: Check sendObserverText was called
-                expect(mockSendObserverText).toHaveBeenCalledTimes(1);
-                
-                // Calculate expected history based on testHistorySize
-                const expectedHistoryCount = Math.min(fullHistory.length, testHistorySize); // Should be 2
-                const expectedHistoryMessages = fullHistory.slice(-expectedHistoryCount); // Should get last 2 messages
-
-                // Instead of parsing the payload directly, verify the mock was called with a string that contains expected content
-                expect(mockSendObserverText).toHaveBeenCalledWith(
-                    expect.stringContaining(defaultChatOptions.systemMessage)
-                );
-                expect(mockSendObserverText).toHaveBeenCalledWith(
-                    expect.stringContaining(newUserMessage)
-                );
-                expect(mockSendObserverText).toHaveBeenCalledWith(
-                    expect.stringContaining(defaultChatOptions.model)
-                );
-                
-                // Verify at least one history message is included
-                if (expectedHistoryMessages.length > 0 && expectedHistoryMessages[0]?.content) {
-                    expect(mockSendObserverText).toHaveBeenCalledWith(
-                        expect.stringContaining(expectedHistoryMessages[0].content)
-                    );
-                }
-
-                // Assert: Check that completions (HTTP) was also called
-                expect(requestMock).toHaveBeenCalledTimes(1);
-                expect(requestMock).toHaveBeenCalledWith(
-                    'POST',
-                    '/chat/completions',
-                    { // Not using expect.objectContaining for more precise matching
-                        model: defaultChatOptions.model,
-                        messages: [ 
-                           { role: 'system', content: defaultChatOptions.systemMessage },
-                           { role: 'user', content: newUserMessage, timestamp: expect.any(String) }
-                        ],
-                        stream: false, 
-                        compliance: true // Default from send -> completions
-                    },
-                    false
-                );
-
-                // Assert: History *is* updated by the successful HTTP call
-                // Note: addAssistantResponseSpy is not called directly in send, but via completions
-                const addAssistantResponseSpy = vi.spyOn(chatModule as any, 'addAssistantResponseToHistory');
-                expect(addMessageSpy).toHaveBeenCalledTimes(1); // User message added by completions
-                // We need to wait for the promise from send to resolve before checking assistant history
-                await Promise.resolve(); // Allow microtasks to run
-                expect(addAssistantResponseSpy).toHaveBeenCalledTimes(1); // Assistant message added by completions
-
-                // Assert: The overall function should return the HTTP response
-                expect(result).toEqual(mockHttpResponse);
-
-                addMessageSpy.mockRestore();
-                addAssistantResponseSpy.mockRestore();
-                requestMock.mockRestore(); // Restore spy
-            });
-
-            it('should return HTTP result even if observer send fails', async () => {
-                // Arrange: Set up observer mock to reject
-                mockIsObserverConnected.mockReturnValue(true);
-                mockSendObserverText.mockRejectedValue(new Error('Observer send failed')); // Mock observer failure
-
-                // Mock the HTTP response for the parallel completions call
-                const requestMock = vi.spyOn(requestUtilMock, 'request');
-                const mockHttpResponse: ChatCompletionResponse = { id: 'r-obs-err', object: 'chat.completion', created: 1, model: defaultChatOptions.model, choices: [{ index: 0, message: { role: 'assistant', content: 'HTTP Fallback Response' }, finish_reason: 'stop' }] };
-                requestMock.mockResolvedValue(mockHttpResponse); // Assume non-streaming
-
-                const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
-                const addAssistantResponseSpy = vi.spyOn(chatModule as any, 'addAssistantResponseToHistory');
-                const newUserMessage = 'Another observer test';
-
-                // Act & Assert: Expect send NOT to throw (error is caught), but log it
-                // The actual HTTP call should still proceed and its result returned
-                const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {}); // Suppress console.error
-                const result = await chatModule.send(newUserMessage);
-
-                // Assert: Check console log, HTTP call, and history
-                expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('[Animus SDK] Background Observer send failed:'), 'Observer send failed');
-                expect(requestMock).toHaveBeenCalledTimes(1); // HTTP call still happened
-                // History is updated by the successful HTTP call
-                expect(addMessageSpy).toHaveBeenCalledTimes(1);
-                await Promise.resolve(); // Allow microtasks
-                expect(addAssistantResponseSpy).toHaveBeenCalledTimes(1);
-                expect(result).toEqual(mockHttpResponse); // Should return the HTTP response
-
-                consoleErrorSpy.mockRestore();
-                addMessageSpy.mockRestore();
-                addAssistantResponseSpy.mockRestore();
-                requestMock.mockRestore();
-            });
-        }); // End Observer Integration describe
       });
 
   });
@@ -855,9 +778,7 @@ it('should clean think tags and store reasoning when adding assistant message to
     it('should handle non-streaming completions with tool calls', async () => {
       chatModule = new ChatModule(
         requestUtilMock,
-        { ...defaultChatOptions, historySize: 2 }, // Enable history
-        mockIsObserverConnected,
-        mockSendObserverText
+        { ...defaultChatOptions, historySize: 2 } // Enable history
       );
 
       const requestMock = vi.spyOn(requestUtilMock, 'request');
@@ -925,7 +846,6 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         null, // content
         undefined, // compliance_violations
-        false, // isFromObserver
         mockToolCalls // tool_calls
       );
 
@@ -1012,9 +932,7 @@ it('should clean think tags and store reasoning when adding assistant message to
     it('should handle streaming completions with tool calls', async () => {
       chatModule = new ChatModule(
         requestUtilMock,
-        { ...defaultChatOptions, historySize: 3 }, // Enable history
-        mockIsObserverConnected,
-        mockSendObserverText
+        { ...defaultChatOptions, historySize: 3 } // Enable history
       );
 
       const requestMock = vi.spyOn(requestUtilMock, 'request');
@@ -1149,7 +1067,6 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         null, // content
         undefined, // compliance_violations
-        false, // isFromObserver
         [expectedFinalToolCall] // tool_calls
       );
 
@@ -1168,9 +1085,7 @@ it('should clean think tags and store reasoning when adding assistant message to
     it('should send tool_choice: "none" when specified, even with tools present', async () => {
       chatModule = new ChatModule(
         requestUtilMock,
-        { ...defaultChatOptions, historySize: 1 }, // Simple history for this test
-        mockIsObserverConnected,
-        mockSendObserverText
+        { ...defaultChatOptions, historySize: 1 } // Simple history for this test
       );
 
       const requestMock = vi.spyOn(requestUtilMock, 'request');
@@ -1228,7 +1143,6 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         "Okay, I will not use any tools for this request.", // content
         undefined, // compliance_violations
-        false, // isFromObserver
         undefined // tool_calls
       );
 
@@ -1237,7 +1151,7 @@ it('should clean think tags and store reasoning when adding assistant message to
                                       // Actually, historySize 1 means only the last message.
                                       // After user + assistant, history will be [assistant]
       // Let's re-init with historySize: 2 for clarity on user + assistant
-      chatModule = new ChatModule( requestUtilMock, { ...defaultChatOptions, historySize: 2 }, mockIsObserverConnected, mockSendObserverText );
+      chatModule = new ChatModule( requestUtilMock, { ...defaultChatOptions, historySize: 2 } );
       // Clear spies and mocks for the re-run part of this test logic
       requestMock.mockClear();
       addAssistantResponseSpy.mockClear();
@@ -1269,9 +1183,7 @@ it('should clean think tags and store reasoning when adding assistant message to
       };
       chatModule = new ChatModule(
         requestUtilMock,
-        chatOptionsWithTools,
-        mockIsObserverConnected,
-        mockSendObserverText
+        chatOptionsWithTools
       );
 
       const requestMock = vi.spyOn(requestUtilMock, 'request');
@@ -1327,7 +1239,6 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         null,
         undefined,
-        false,
         mockToolCalls
       );
       const history = chatModule.getChatHistory();
@@ -1338,5 +1249,209 @@ it('should clean think tags and store reasoning when adding assistant message to
       addAssistantResponseSpy.mockRestore();
     });
 
+  });
+
+  // --- Tests for AutoTurn Feature ---
+  describe('ChatModule - AutoTurn Feature', () => {
+    it('should handle API-provided turns and next field in non-streaming response', async () => {
+      // Configure ChatModule with autoTurn enabled
+      const autoTurnOptions: AnimusChatOptions = {
+        ...defaultChatOptions,
+        autoTurn: true,
+        historySize: 5
+      };
+      chatModule = new ChatModule(
+        requestUtilMock,
+        autoTurnOptions
+      );
+
+      const requestMock = vi.spyOn(requestUtilMock, 'request');
+      
+      // Mock API response with turns and next fields
+      const mockApiResponse: ChatCompletionResponse = {
+        id: 'chatcmpl-autoturn',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: defaultChatOptions.model,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: 'This is a long response that was split into multiple turns.',
+            turns: [
+              'This is a long response that was split',
+              'into multiple turns.'
+            ],
+            next: true // Indicates follow-up is expected
+          },
+          finish_reason: 'stop'
+        }]
+      };
+      
+      // Mock the follow-up request response
+      const mockFollowUpResponse: ChatCompletionResponse = {
+        id: 'chatcmpl-followup',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: defaultChatOptions.model,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: 'This is the follow-up response.',
+            next: false
+          },
+          finish_reason: 'stop'
+        }]
+      };
+
+      // First call returns response with next=true
+      requestMock.mockResolvedValueOnce(mockApiResponse);
+      // Second call (automatic follow-up) returns final response
+      requestMock.mockResolvedValueOnce(mockFollowUpResponse);
+
+      const request: ChatCompletionRequest = {
+        messages: [{ role: 'user', content: 'Tell me about autoTurn' }],
+        autoTurn: true
+      };
+
+      const response = await chatModule.completions(request);
+
+      // 1. Verify first requestUtil call includes autoTurn parameter
+      expect(requestMock).toHaveBeenNthCalledWith(1,
+        'POST',
+        '/chat/completions',
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            { role: 'system', content: defaultChatOptions.systemMessage },
+            { role: 'user', content: 'Tell me about autoTurn', timestamp: expect.any(String) }
+          ]),
+          autoTurn: true,
+          model: defaultChatOptions.model
+        }),
+        false
+      );
+
+      // 2. Verify the response includes turns and next fields
+      expect(response.choices[0]?.message.turns).toEqual([
+        'This is a long response that was split',
+        'into multiple turns.'
+      ]);
+      expect(response.choices[0]?.message.next).toBe(true);
+
+      // 3. Wait for the automatic follow-up request (with timeout)
+      await new Promise(resolve => setTimeout(resolve, 1100)); // Wait slightly longer than the 1s delay
+
+      // 4. Verify follow-up request was made automatically
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(requestMock).toHaveBeenNthCalledWith(2,
+        'POST',
+        '/chat/completions',
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            { role: 'system', content: defaultChatOptions.systemMessage },
+            expect.objectContaining({ role: 'user', content: 'Tell me about autoTurn' }), // Original user message
+            expect.objectContaining({ role: 'assistant', content: 'This is a long response that was split' }) // Assistant response
+          ]),
+          autoTurn: true,
+          max_tokens: 150 // Should use reduced tokens for follow-up
+        }),
+        false // Follow-up uses non-streaming when autoTurn is enabled
+      );
+
+      requestMock.mockRestore();
+    });
+
+    it('should pass autoTurn parameter from config when not specified in request', async () => {
+      const autoTurnOptions: AnimusChatOptions = {
+        ...defaultChatOptions,
+        autoTurn: true
+      };
+      chatModule = new ChatModule(
+        requestUtilMock,
+        autoTurnOptions
+      );
+
+      const requestMock = vi.spyOn(requestUtilMock, 'request');
+      const mockApiResponse: ChatCompletionResponse = {
+        id: 'chatcmpl-config-autoturn',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: defaultChatOptions.model,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: 'Response with config autoTurn',
+            next: false
+          },
+          finish_reason: 'stop'
+        }]
+      };
+      requestMock.mockResolvedValue(mockApiResponse);
+
+      const request: ChatCompletionRequest = {
+        messages: [{ role: 'user', content: 'Test config autoTurn' }]
+        // autoTurn not specified in request, should use config default
+      };
+
+      await chatModule.completions(request);
+
+      // Verify autoTurn from config is used
+      expect(requestMock).toHaveBeenCalledWith(
+        'POST',
+        '/chat/completions',
+        expect.objectContaining({
+          autoTurn: true // Should use config value
+        }),
+        false
+      );
+
+      requestMock.mockRestore();
+    });
+
+    it('should default autoTurn to false when not specified anywhere', async () => {
+      // Use default config without autoTurn
+      chatModule = new ChatModule(
+        requestUtilMock,
+        defaultChatOptions // No autoTurn in config
+      );
+
+      const requestMock = vi.spyOn(requestUtilMock, 'request');
+      const mockApiResponse: ChatCompletionResponse = {
+        id: 'chatcmpl-default-autoturn',
+        object: 'chat.completion',
+        created: Date.now(),
+        model: defaultChatOptions.model,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: 'Response without autoTurn'
+          },
+          finish_reason: 'stop'
+        }]
+      };
+      requestMock.mockResolvedValue(mockApiResponse);
+
+      const request: ChatCompletionRequest = {
+        messages: [{ role: 'user', content: 'Test default autoTurn' }]
+        // autoTurn not specified anywhere
+      };
+
+      await chatModule.completions(request);
+
+      // Verify autoTurn defaults to false
+      expect(requestMock).toHaveBeenCalledWith(
+        'POST',
+        '/chat/completions',
+        expect.objectContaining({
+          autoTurn: false // Should default to false
+        }),
+        false
+      );
+
+      requestMock.mockRestore();
+    });
   });
 });
