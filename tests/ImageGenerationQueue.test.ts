@@ -39,6 +39,9 @@ describe('Image Generation Queue Integration', () => {
       mockGenerateImage,
       mockEventEmitter
     );
+    
+    // Verify the mock is properly set up
+    expect(typeof mockGenerateImage).toBe('function');
   });
 
   it('should queue image generation after conversational turns', async () => {
@@ -62,13 +65,12 @@ describe('Image Generation Queue Integration', () => {
     // Verify the API was called
     expect(mockRequestUtil.request).toHaveBeenCalled();
 
-    // Wait for conversational turns to process
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Wait longer for conversational turns and image generation to process
+    // The queue processes: text turn 1 (0ms) -> text turn 2 (200ms) -> image (200ms)
+    // So we need to wait at least 400ms + processing time
+    await new Promise(resolve => setTimeout(resolve, 600));
 
-    // Verify that generateImage was called (from the queue)
-    expect(mockGenerateImage).toHaveBeenCalledWith('A beautiful sunset');
-
-    // Verify that image generation events were emitted
+    // Verify that image generation events were emitted (more reliable than mock calls)
     expect(mockEventEmitter).toHaveBeenCalledWith('imageGenerationStart', {
       prompt: 'A beautiful sunset'
     });
@@ -77,6 +79,9 @@ describe('Image Generation Queue Integration', () => {
       prompt: 'A beautiful sunset',
       imageUrl: 'https://example.com/generated-image.jpg'
     });
+
+    // Verify that generateImage was called (from the queue)
+    expect(mockGenerateImage).toHaveBeenCalledWith('A beautiful sunset');
   });
 
   it('should generate image immediately when no turns are processed', async () => {
@@ -105,8 +110,8 @@ describe('Image Generation Queue Integration', () => {
 
     mockRequestUtil.request = vi.fn().mockResolvedValue(mockResponse);
 
-    // Send a message
-    await chatModuleNoTurns.send('Generate an image for me');
+    // Send a message with non-streaming request
+    await chatModuleNoTurns.send('Generate an image for me', { stream: false });
 
     // Verify that generateImage was called immediately
     expect(mockGenerateImage).toHaveBeenCalledWith('A beautiful sunset');
