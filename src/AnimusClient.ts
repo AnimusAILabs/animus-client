@@ -389,8 +389,11 @@ export class AnimusClient extends EventEmitter<AnimusClientEventMap> {
           if (this.chat) {
               // Add image message as an assistant response to history
               this.chat.addAssistantResponseToHistory(
-                  `<img src='${imageUrl}' description='${prompt}' />`,
-                  null // No compliance violations
+                  `<image description='${prompt}' />`,
+                  null, // No compliance violations
+                  undefined, // No tool calls
+                  undefined, // No group metadata
+                  null // No reasoning
               );
           }
           
