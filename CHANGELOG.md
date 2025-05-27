@@ -1,3 +1,10 @@
+# [1.11.0](https://github.com/AnimusAILabs/animus-client/compare/v1.10.0...v1.11.0) (2025-05-27)
+
+
+### Features
+
+* Pass reasoning to message event ([4b45edf](https://github.com/AnimusAILabs/animus-client/commit/4b45edf29a43d1944c2466ef88446dd9b2fa5bcc))
+
 # [1.10.0](https://github.com/AnimusAILabs/animus-client/compare/v1.9.0...v1.10.0) (2025-05-27)
 
 
