@@ -1,3 +1,10 @@
+# [1.13.0](https://github.com/AnimusAILabs/animus-client/compare/v1.12.0...v1.13.0) (2025-05-27)
+
+
+### Features
+
+* Dont pass image url back to the API ([b8d7a9a](https://github.com/AnimusAILabs/animus-client/commit/b8d7a9a9beba00532ed5fccd9cd87632e10d3c83))
+
 # [1.12.0](https://github.com/AnimusAILabs/animus-client/compare/v1.11.0...v1.12.0) (2025-05-27)
 
 
