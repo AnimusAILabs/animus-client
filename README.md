@@ -1,4 +1,4 @@
-# Animus Client SDK (Browser)
+# Animus Client SDK (Browser) 
 
 [![npm version](https://badge.fury.io/js/animus-client.svg)](https://badge.fury.io/js/animus-client) <!-- Placeholder badge -->
 
