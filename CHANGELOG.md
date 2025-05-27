@@ -1,3 +1,10 @@
+# [1.12.0](https://github.com/AnimusAILabs/animus-client/compare/v1.11.0...v1.12.0) (2025-05-27)
+
+
+### Features
+
+* Show reasoning in response ui ([112b1a4](https://github.com/AnimusAILabs/animus-client/commit/112b1a4bfb0816ea2c45b9d8fb39148e1cba177b))
+
 # [1.11.0](https://github.com/AnimusAILabs/animus-client/compare/v1.10.0...v1.11.0) (2025-05-27)
 
 
