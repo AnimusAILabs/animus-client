@@ -185,8 +185,15 @@ export class ChatModule {
        console.log('[Chat] Creating conversational turns manager with config:', config);
        this.conversationalTurnsManager = new ConversationalTurnsManager(
          config,
-         (content, violations, toolCalls, groupMetadata) => {
-           this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata, null);
+         (content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext) => {
+           if (messageType === 'image' && imagePrompt) {
+             // Handle image generation
+             console.log('[Chat] Processing image generation from queue:', imagePrompt);
+             this.generateImageAndHandleNext(imagePrompt, hasNext);
+           } else {
+             // Handle regular text message
+             this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata, null);
+           }
          },
          this.eventEmitter
        );
@@ -465,7 +472,9 @@ export class ChatModule {
                       accumulatedContent,
                       complianceViolations,
                       accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
-                      accumulatedTurns
+                      accumulatedTurns,
+                      undefined, // imagePrompt - not supported in streaming yet
+                      hasNext
                     );
                     
                     // If not processed by turns manager, emit completion event and add to history directly
@@ -628,7 +637,10 @@ export class ChatModule {
             const wasProcessed = self.conversationalTurnsManager.processResponse(
               accumulatedContent,
               complianceViolations,
-              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+              undefined, // apiTurns - not available in error case
+              undefined, // imagePrompt - not supported in streaming yet
+              undefined  // hasNext - not available in error case
             );
             
             // If not processed by turns manager, fall back to standard history update
@@ -695,19 +707,23 @@ export class ChatModule {
               console.log('[Chat] Response content:', assistantMessageContent);
               console.log('[Chat] Response reasoning:', assistantReasoning);
               
-              // Extract turns and next from the API response
+              // Extract turns, next, and image prompt from the API response
               const apiTurns = assistantMessage?.turns;
               const hasNext = assistantMessage?.next;
+              const imagePrompt = assistantMessage?.image_prompt;
               
               console.log('[Chat] API turns:', apiTurns?.length || 0, 'turns');
               console.log('[Chat] Has next:', hasNext);
+              console.log('[Chat] Has image prompt:', !!imagePrompt);
               
               // Try to process with conversational turns first
               const wasProcessed = this.conversationalTurnsManager?.processResponse(
                   assistantMessageContent ?? null,
                   response.compliance_violations,
                   assistantToolCalls,
-                  apiTurns // Pass API-provided turns
+                  apiTurns, // Pass API-provided turns
+                  imagePrompt,
+                  hasNext
               );
               
               console.log('[Chat] Conversational turns processed:', wasProcessed);
@@ -977,7 +993,9 @@ export class ChatModule {
                                           accumulatedContent,
                                           complianceViolations,
                                           accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
-                                          accumulatedTurns
+                                          accumulatedTurns,
+                                          undefined, // imagePrompt - not supported in streaming yet
+                                          hasNext
                                       );
                                       
                                       console.log('[Chat] Was processed by conversational turns:', wasProcessed);
@@ -1164,7 +1182,9 @@ export class ChatModule {
                               content,
                               jsonResponse.compliance_violations,
                               toolCalls,
-                              turns
+                              turns,
+                              imagePrompt,
+                              next
                           );
                       }
                       
@@ -1192,12 +1212,14 @@ export class ChatModule {
                           );
                       }
                       
-                      // Always handle image generation immediately when we have an image prompt
-                      // This ensures images are generated regardless of conversational turns
-                      if (imagePrompt) {
-                          console.log('[Chat] Generating image immediately');
+                      // Handle image generation and follow-up requests
+                      if (imagePrompt && !turnsProcessed) {
+                          // Only generate image immediately if turns were NOT processed
+                          // If turns were processed, image generation is handled by the queue
+                          console.log('[Chat] Generating image immediately (no turns processed)');
                           this.generateImageAndHandleNext(imagePrompt, next);
-                      } else if (next) {
+                      } else if (next && !turnsProcessed) {
+                          // Only handle follow-up immediately if turns were NOT processed
                           if (turnsProcessed) {
                               // If turns were processed, store the follow-up request for later
                               console.log('[Chat] Storing follow-up request for after turns complete');
@@ -1827,7 +1849,9 @@ export class ChatModule {
                        content,
                        jsonResponse.compliance_violations,
                        toolCalls,
-                       turns
+                       turns,
+                       imagePrompt,
+                       next
                    );
                }
                
@@ -1855,12 +1879,13 @@ export class ChatModule {
                    
                }
                
-               // Always handle image generation immediately when we have an image prompt
-               // This ensures images are generated regardless of conversational turns
-               if (imagePrompt) {
-                   console.log('[Chat] Generating image immediately (follow-up)');
+               // Handle image generation and follow-up requests
+               if (imagePrompt && !turnsProcessed) {
+                   // Only generate image immediately if turns were NOT processed
+                   console.log('[Chat] Generating image immediately (follow-up, no turns processed)');
                    this.generateImageAndHandleNext(imagePrompt, next);
-               } else if (next) {
+               } else if (next && !turnsProcessed) {
+                   // Only handle follow-up immediately if turns were NOT processed
                    if (turnsProcessed) {
                        // If turns were processed, store the follow-up request for later
                        console.log('[Chat] Storing follow-up request for after turns complete (follow-up)');

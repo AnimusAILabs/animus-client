@@ -139,7 +139,10 @@ export class MessageQueue {
           messageIndex: message.messageIndex,
           totalInGroup: message.totalInGroup,
           processedTimestamp: processedTimestamp // Add the actual processing timestamp
-        }
+        },
+        message.messageType || 'text',
+        message.imagePrompt,
+        message.hasNext
       );
       
       this.processedCount++;

@@ -51,10 +51,18 @@ export class ConversationalTurnsManager {
       this.splitter = new ResponseSplitter(config);
       
       // Create a callback that adds messages to history with group metadata
-      const groupAwareCallback = (content: string | null, violations?: string[], toolCalls?: any[], groupMetadata?: any) => {
-        console.log('[ConversationalTurns] Adding split message to history with group metadata:', groupMetadata);
+      const groupAwareCallback = (
+        content: string | null,
+        violations?: string[],
+        toolCalls?: any[],
+        groupMetadata?: any,
+        messageType?: 'text' | 'image',
+        imagePrompt?: string,
+        hasNext?: boolean
+      ) => {
+        console.log('[ConversationalTurns] Processing message with type:', messageType, 'groupMetadata:', groupMetadata);
         if (onMessageCallback) {
-          onMessageCallback(content, violations, toolCalls, groupMetadata);
+          onMessageCallback(content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext);
         }
       };
       
@@ -71,13 +79,17 @@ export class ConversationalTurnsManager {
    * @param complianceViolations Any compliance violations from the response
    * @param toolCalls Any tool calls from the response
    * @param apiTurns Pre-split turns from the API (if autoTurn was enabled)
+   * @param imagePrompt Image prompt for generation (optional)
+   * @param hasNext Whether there's a follow-up request (optional)
    * @returns True if the response was split and queued, false if normal processing should continue
    */
   public processResponse(
     content: string | null,
     complianceViolations?: string[],
     toolCalls?: ToolCall[],
-    apiTurns?: string[]
+    apiTurns?: string[],
+    imagePrompt?: string,
+    hasNext?: boolean
   ): boolean {
     // Return false if feature is disabled or no content
     if (!this.messageQueue || !content) {
@@ -145,6 +157,32 @@ export class ConversationalTurnsManager {
       compliance_violations: index === splitMessages.length - 1 ? complianceViolations : undefined,
       tool_calls: index === splitMessages.length - 1 ? toolCalls : undefined
     }));
+    
+    // If there's an image prompt, add an image generation message to the queue
+    if (imagePrompt) {
+      console.log('[ConversationalTurns] Adding image generation to queue:', imagePrompt);
+      const imageDelay = this.calculateDelayForTurn(''); // Small delay for image generation
+      const imageMessage: QueuedMessage = {
+        content: '', // No text content for image generation
+        delay: imageDelay,
+        timestamp: 0, // Will be set when processed
+        turnIndex: splitMessages.length, // After all text messages
+        totalTurns: splitMessages.length + 1, // Include image in total
+        groupId: groupId,
+        messageIndex: splitMessages.length,
+        totalInGroup: splitMessages.length + 1,
+        messageType: 'image',
+        imagePrompt: imagePrompt,
+        hasNext: hasNext
+      };
+      queuedMessages.push(imageMessage);
+      
+      // Update totalInGroup for all messages to include the image
+      queuedMessages.forEach(msg => {
+        msg.totalInGroup = splitMessages.length + 1;
+        msg.totalTurns = splitMessages.length + 1;
+      });
+    }
     
     // Enqueue the messages - they will be added to history with group metadata
     console.log('[ConversationalTurns] Enqueueing', queuedMessages.length, 'messages with delays:',

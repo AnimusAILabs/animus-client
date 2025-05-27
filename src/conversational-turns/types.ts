@@ -59,6 +59,10 @@ export interface QueuedMessage {
   groupId?: string;
   messageIndex?: number;
   totalInGroup?: number;
+  // Image generation metadata
+  messageType?: 'text' | 'image';
+  imagePrompt?: string;
+  hasNext?: boolean;
 }
 
 /**
@@ -111,7 +115,10 @@ export type MessageCallback = (
   content: string | null,
   violations?: string[],
   toolCalls?: ToolCall[],
-  groupMetadata?: GroupMetadata
+  groupMetadata?: GroupMetadata,
+  messageType?: 'text' | 'image',
+  imagePrompt?: string,
+  hasNext?: boolean
 ) => void;
 
 /**
