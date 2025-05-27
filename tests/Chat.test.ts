@@ -171,7 +171,7 @@ describe('ChatModule', () => {
     // 5. Verify assistant response added to history *after* stream consumption
     expect(addAssistantResponseSpy).toHaveBeenCalledTimes(1);
     // Updated to include new default arguments for tool_calls
-    expect(addAssistantResponseSpy).toHaveBeenCalledWith('Hello world!', undefined, undefined);
+    expect(addAssistantResponseSpy).toHaveBeenCalledWith('Hello world!', undefined, undefined, undefined, null);
 
     // 6. Verify final history state (addMessageToHistory handles trimming internally)
     // Access history AFTER spies have been checked
@@ -846,7 +846,9 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         null, // content
         undefined, // compliance_violations
-        mockToolCalls // tool_calls
+        mockToolCalls, // tool_calls
+        undefined, // groupMetadata
+        null // reasoning
       );
 
       const history = chatModule.getChatHistory();
@@ -1067,7 +1069,9 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         null, // content
         undefined, // compliance_violations
-        [expectedFinalToolCall] // tool_calls
+        [expectedFinalToolCall], // tool_calls
+        undefined, // groupMetadata
+        null // reasoning
       );
 
       const history = chatModule.getChatHistory();
@@ -1143,7 +1147,9 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         "Okay, I will not use any tools for this request.", // content
         undefined, // compliance_violations
-        undefined // tool_calls
+        undefined, // tool_calls
+        undefined, // groupMetadata
+        null // reasoning
       );
 
       const history = chatModule.getChatHistory();
@@ -1239,7 +1245,9 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(addAssistantResponseSpy).toHaveBeenCalledWith(
         null,
         undefined,
-        mockToolCalls
+        mockToolCalls,
+        undefined, // groupMetadata
+        null // reasoning
       );
       const history = chatModule.getChatHistory();
       expect(history.length).toBe(2);

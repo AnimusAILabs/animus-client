@@ -161,6 +161,7 @@ export type AnimusClientEventMap = {
       conversationId: string;
       messageType?: 'regular' | 'auto' | 'followup';
       content: string;
+      reasoning?: string;
       toolCalls?: ToolCall[];
       imagePrompt?: string;
       turnIndex?: number;

@@ -68,6 +68,7 @@ interface ChatCompletionChoice {
   message: {
     role: 'assistant';
     content: string | null; // Can be null if tool_calls are present
+    reasoning?: string; // Reasoning content from the model
     tool_calls?: ToolCall[];
     image_prompt?: string; // Prompt for generating an image
     turns?: string[]; // Array of split conversation turns from autoTurn
@@ -185,7 +186,7 @@ export class ChatModule {
        this.conversationalTurnsManager = new ConversationalTurnsManager(
          config,
          (content, violations, toolCalls, groupMetadata) => {
-           this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata);
+           this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata, null);
          },
          this.eventEmitter
        );
@@ -480,7 +481,9 @@ export class ChatModule {
                       self.addAssistantResponseToHistory(
                         accumulatedContent,
                         complianceViolations,
-                        accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                        accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                        undefined,
+                        null
                       );
                     }
                   } else {
@@ -495,7 +498,9 @@ export class ChatModule {
                     self.addAssistantResponseToHistory(
                       accumulatedContent,
                       complianceViolations,
-                      accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                      accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                      undefined,
+                      null
                     );
                   }
                   
@@ -631,7 +636,9 @@ export class ChatModule {
               self.addAssistantResponseToHistory(
                 accumulatedContent,
                 complianceViolations,
-                accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                undefined,
+                null
               );
             }
           } else {
@@ -639,7 +646,9 @@ export class ChatModule {
             self.addAssistantResponseToHistory(
               accumulatedContent,
               complianceViolations,
-              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+              undefined,
+              null
             );
           }
           
@@ -677,12 +686,14 @@ export class ChatModule {
           // Add the assistant's response only if no compliance violations
           const assistantMessage = response.choices?.[0]?.message;
           const assistantMessageContent = response.choices?.[0]?.message?.content;
+          const assistantReasoning = response.choices?.[0]?.message?.reasoning;
           const assistantToolCalls = response.choices?.[0]?.message?.tool_calls;
 
           if (assistantMessageContent !== undefined || assistantToolCalls) {
               console.log('[Chat] Non-streaming response, processing with conversational turns');
               console.log('[Chat] Has conversational turns manager:', !!this.conversationalTurnsManager);
               console.log('[Chat] Response content:', assistantMessageContent);
+              console.log('[Chat] Response reasoning:', assistantReasoning);
               
               // Extract turns and next from the API response
               const apiTurns = assistantMessage?.turns;
@@ -707,6 +718,7 @@ export class ChatModule {
                   conversationId: `regular_${Date.now()}`,
                   messageType: 'regular',
                   content: assistantMessageContent ?? '',
+                  ...(assistantReasoning && { reasoning: assistantReasoning }),
                   ...(assistantToolCalls && assistantToolCalls.length > 0 && { toolCalls: assistantToolCalls }),
                   ...(assistantMessage?.image_prompt && { imagePrompt: assistantMessage.image_prompt })
                 });
@@ -719,7 +731,9 @@ export class ChatModule {
                   this.addAssistantResponseToHistory(
                       assistantMessageContent ?? null, // Pass null if content is undefined
                       response.compliance_violations,
-                      assistantToolCalls
+                      assistantToolCalls,
+                      undefined, // No group metadata for regular responses
+                      assistantReasoning ?? null // Pass reasoning from API response
                   );
               }
               
@@ -937,7 +951,9 @@ export class ChatModule {
                               this.addAssistantResponseToHistory(
                                   accumulatedContent,
                                   complianceViolations,
-                                  accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                                  accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                                  undefined,
+                                  null
                               );
                           }
                           break;
@@ -980,7 +996,9 @@ export class ChatModule {
                                           this.addAssistantResponseToHistory(
                                               accumulatedContent,
                                               complianceViolations,
-                                              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                                              accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                                              undefined,
+                                              null
                                           );
                                       }
                                   } else {
@@ -995,7 +1013,9 @@ export class ChatModule {
                                       this.addAssistantResponseToHistory(
                                           accumulatedContent,
                                           complianceViolations,
-                                          accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined
+                                          accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
+                                          undefined,
+                                          null
                                       );
                                   }
                                   
@@ -1163,7 +1183,9 @@ export class ChatModule {
                           this.addAssistantResponseToHistory(
                               content,
                               jsonResponse.compliance_violations,
-                              toolCalls
+                              toolCalls,
+                              undefined,
+                              null
                           );
                       }
                       
@@ -1308,7 +1330,8 @@ export class ChatModule {
        assistantContent: string | null, // Can be null if only tool_calls are present
        compliance_violations?: string[] | null,
        tool_calls?: ToolCall[],
-       groupMetadata?: GroupMetadata
+       groupMetadata?: GroupMetadata,
+       reasoning?: string | null // Add reasoning parameter
    ): void {
        // If compliance violations exist, log but still add to history for context
        // The conversation needs context even if content has violations
@@ -1333,6 +1356,7 @@ export class ChatModule {
            role: 'assistant',
            content: assistantContent, // Will be null if no text content
            timestamp: timestamp,
+           ...(reasoning && { reasoning: reasoning }), // Add reasoning if provided
            ...(tool_calls && tool_calls.length > 0 && { tool_calls: tool_calls }),
            ...(compliance_violations && compliance_violations.length > 0 && { compliance_violations }),
            // Add group metadata if provided
@@ -1821,7 +1845,9 @@ export class ChatModule {
                    this.addAssistantResponseToHistory(
                        content,
                        jsonResponse.compliance_violations,
-                       toolCalls
+                       toolCalls,
+                       undefined,
+                       null
                    );
                    
                }
