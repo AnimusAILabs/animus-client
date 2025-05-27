@@ -90,7 +90,16 @@ export class ConversationalTurnsManager {
     
     let splitMessages: { content: string; delay: number; turnIndex: number; totalTurns: number }[];
     
-    // If API provided pre-split turns, use those instead of client-side splitting
+    // Check if we should use splitting based on splitProbability
+    const shouldSplit = Math.random() < (this.config?.splitProbability ?? 1.0);
+    console.log('[ConversationalTurns] Split probability check:', shouldSplit, 'probability:', this.config?.splitProbability);
+    
+    if (!shouldSplit) {
+      console.log('[ConversationalTurns] Skipping split due to probability - using original content');
+      return false; // Use original content instead of splits
+    }
+    
+    // If API provided pre-split turns, use those
     if (apiTurns && apiTurns.length > 1) {
       console.log('[ConversationalTurns] Using API-provided turns:', apiTurns.length, 'turns');
       splitMessages = apiTurns.map((turn, index) => ({
