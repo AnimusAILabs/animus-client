@@ -1,3 +1,10 @@
+# [1.14.0](https://github.com/AnimusAILabs/animus-client/compare/v1.13.0...v1.14.0) (2025-05-27)
+
+
+### Features
+
+* Better event handling for image generation ([1cd44a3](https://github.com/AnimusAILabs/animus-client/commit/1cd44a370e4d9834ec35b1d77092354487481e34))
+
 # [1.13.0](https://github.com/AnimusAILabs/animus-client/compare/v1.12.0...v1.13.0) (2025-05-27)
 
 
