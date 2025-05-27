@@ -36,7 +36,8 @@ let currentComplianceConfig = {}; // Store the active compliance config (example
 function logOutput(message, isError = false) {
     const prefix = isError ? "ERROR:" : "INFO:";
     if (typeof message === 'object') {
-        console.log(prefix, message);
+        console.log(prefix);
+        console.log(message);
     } else {
         console.log(`${prefix} ${message}`);
     }
@@ -323,7 +324,7 @@ async function initializeAndTest() {
             const messageType = data.messageType || 'regular';
             const contentLength = data.content ? data.content.length : 0;
             logOutput(`✅ ${messageType} message complete (${contentLength} chars)`);
-            logOutput(`🔍 Message data:`, data); // Debug: log the entire data object
+            console.log(`🔍 Message data:`, data); // Debug: log the entire data object
             
             // Handle different message types
             if (messageType === 'auto') {
@@ -349,7 +350,7 @@ async function initializeAndTest() {
                 followupIndicators.forEach(indicator => indicator.remove());
                 
                 if (data.content) {
-                    addMessage('assistant', data.content);
+                    addMessage('assistant', data.content, data.reasoning);
                 }
                 
             } else {
@@ -365,7 +366,7 @@ async function initializeAndTest() {
                 removeTypingIndicator();
                 
                 if (data.content && data.content.trim()) {
-                    addMessage('assistant', data.content);
+                    addMessage('assistant', data.content, data.reasoning);
                 }
             }
             

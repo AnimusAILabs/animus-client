@@ -1144,12 +1144,14 @@ export class ChatModule {
                   if (choice?.message) {
                       const message = choice.message;
                       const content = message.content;
+                      const reasoning = message.reasoning;
                       const toolCalls = message.tool_calls;
                       const turns = message.turns;
                       const next = message.next;
                       const imagePrompt = message.image_prompt;
                       
                       console.log('[Chat] Response content:', content);
+                      console.log('[Chat] Response reasoning:', reasoning);
                       console.log('[Chat] API turns:', turns?.length || 0, 'turns');
                       console.log('[Chat] Has next:', next);
                       console.log('[Chat] Has image prompt:', !!imagePrompt);
@@ -1174,6 +1176,7 @@ export class ChatModule {
                           if (this.eventEmitter) {
                               this.eventEmitter('messageComplete', {
                                   content: content || '',
+                                  ...(reasoning && { reasoning }),
                                   ...(toolCalls && { toolCalls }),
                                   ...(imagePrompt && { imagePrompt })
                               });
@@ -1185,7 +1188,7 @@ export class ChatModule {
                               jsonResponse.compliance_violations,
                               toolCalls,
                               undefined,
-                              null
+                              reasoning
                           );
                       }
                       
