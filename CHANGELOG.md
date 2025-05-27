@@ -1,3 +1,10 @@
+# [1.10.0](https://github.com/AnimusAILabs/animus-client/compare/v1.9.0...v1.10.0) (2025-05-27)
+
+
+### Features
+
+* Force release ([ef93733](https://github.com/AnimusAILabs/animus-client/commit/ef937334543bb98976125f7a9a4ecca46f23eff5))
+
 # [1.9.0](https://github.com/AnimusAILabs/animus-client/compare/v1.8.0...v1.9.0) (2025-05-26)
 
 
