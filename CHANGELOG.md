@@ -1,3 +1,10 @@
+# [1.15.0](https://github.com/AnimusAILabs/animus-client/compare/v1.14.0...v1.15.0) (2025-05-28)
+
+
+### Features
+
+* Refactor for modularity and clarity ([aef8bd2](https://github.com/AnimusAILabs/animus-client/commit/aef8bd27685125e716e0b0fb82f3527de87ecaab))
+
 # [1.14.0](https://github.com/AnimusAILabs/animus-client/compare/v1.13.0...v1.14.0) (2025-05-27)
 
 
