@@ -15,9 +15,10 @@ export class ResponseSplitter {
   /**
    * Determines if a response should be split and returns split messages with delays
    * @param content The full response content to potentially split
+   * @param forceSplit Optional parameter to bypass probability check and force splitting
    * @returns Array of split messages with delays and turn information
    */
-  public splitResponse(content: string): SplitMessage[] {
+  public splitResponse(content: string, forceSplit?: boolean): SplitMessage[] {
     if (!this.config.enabled || !content?.trim()) {
       return [{ content, delay: 0, turnIndex: 0, totalTurns: 1 }];
     }
@@ -30,8 +31,8 @@ export class ResponseSplitter {
       return [{ content, delay: 0, turnIndex: 0, totalTurns: 1 }];
     }
     
-    // Apply probability check - only split if random value is within probability
-    const shouldSplit = Math.random() <= this.config.splitProbability;
+    // Apply probability check - only split if random value is within probability or if forced
+    const shouldSplit = forceSplit || Math.random() <= this.config.splitProbability;
     if (!shouldSplit) {
       return [{ content, delay: 0, turnIndex: 0, totalTurns: 1 }];
     }

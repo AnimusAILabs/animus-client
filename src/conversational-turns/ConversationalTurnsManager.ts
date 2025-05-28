@@ -99,8 +99,14 @@ export class ConversationalTurnsManager {
     
     let splitMessages: { content: string; delay: number; turnIndex: number; totalTurns: number }[];
     
-    // Check if we should use splitting based on splitProbability
-    const shouldSplit = Math.random() < (this.config?.splitProbability ?? 1.0);
+    // Check if content contains newlines - if so, override probability and force splitting
+    const hasNewlines = content.includes('\n');
+    const hasSplitTurns = (apiTurns && apiTurns.length > 1) || this.splitter;
+    
+    // Force splitting if content has newlines and we have split turns available
+    const shouldSplit = hasNewlines && hasSplitTurns
+      ? true
+      : Math.random() < (this.config?.splitProbability ?? 1.0);
     
     
     if (!shouldSplit) {
@@ -119,8 +125,10 @@ export class ConversationalTurnsManager {
       }));
     } else if (this.splitter) {
       // Fall back to client-side splitting if no API turns provided
+      // Pass forceSplit=true if content has newlines to bypass splitter's probability check
+      const forceSplit = hasNewlines;
       
-      splitMessages = this.splitter.splitResponse(content);
+      splitMessages = this.splitter.splitResponse(content, forceSplit);
       
     } else {
       // No splitter and no API turns - return false for normal processing
