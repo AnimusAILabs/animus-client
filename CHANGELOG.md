@@ -1,3 +1,10 @@
+# [1.16.0](https://github.com/AnimusAILabs/animus-client/compare/v1.15.0...v1.16.0) (2025-05-28)
+
+
+### Features
+
+* When autoTurn is true and \n are in content, override split probablility ([9258896](https://github.com/AnimusAILabs/animus-client/commit/9258896424b0f0c51f8810a2249f7c6b977e8e8f))
+
 # [1.15.0](https://github.com/AnimusAILabs/animus-client/compare/v1.14.0...v1.15.0) (2025-05-28)
 
 
