@@ -14,8 +14,19 @@ describe('Image Generation Queue Integration', () => {
       request: vi.fn()
     } as any;
 
-    // Mock generateImage function
-    mockGenerateImage = vi.fn().mockResolvedValue('https://example.com/generated-image.jpg');
+    // Mock generateImage function that emits events like the real ImageGenerator
+    mockGenerateImage = vi.fn().mockImplementation(async (prompt: string) => {
+      // Emit imageGenerationStart event
+      mockEventEmitter('imageGenerationStart', { prompt });
+      
+      // Simulate async image generation
+      const imageUrl = 'https://example.com/generated-image.jpg';
+      
+      // Emit imageGenerationComplete event
+      mockEventEmitter('imageGenerationComplete', { prompt, imageUrl });
+      
+      return imageUrl;
+    });
 
     // Mock event emitter
     mockEventEmitter = vi.fn();
@@ -147,5 +158,56 @@ describe('Image Generation Queue Integration', () => {
     // Verify that generateImage was not called for the first request
     // (it should have been canceled)
     expect(mockGenerateImage).toHaveBeenCalledTimes(0);
+  });
+
+  it('should not emit duplicate imageGenerationStart events', async () => {
+    // Create ChatModule without conversational turns for immediate image generation
+    const chatModuleNoTurns = new ChatModule(
+      mockRequestUtil,
+      {
+        model: 'test-chat-model',
+        systemMessage: 'Test system message'
+        // No autoTurn config
+      },
+      mockGenerateImage,
+      mockEventEmitter
+    );
+
+    // Mock API response with image prompt
+    const mockResponse = {
+      choices: [{
+        message: {
+          content: 'Here is your response',
+          image_prompt: 'A beautiful sunset',
+          next: false
+        }
+      }]
+    };
+
+    mockRequestUtil.request = vi.fn().mockResolvedValue(mockResponse);
+
+    // Send a message with non-streaming request
+    await chatModuleNoTurns.send('Generate an image for me', { stream: false });
+
+    // Verify that imageGenerationStart was called exactly once
+    const imageStartCalls = mockEventEmitter.mock.calls.filter(
+      call => call[0] === 'imageGenerationStart'
+    );
+    
+    expect(imageStartCalls).toHaveLength(1);
+    expect(imageStartCalls[0]).toEqual(['imageGenerationStart', {
+      prompt: 'A beautiful sunset'
+    }]);
+
+    // Verify that imageGenerationComplete was also called exactly once
+    const imageCompleteCalls = mockEventEmitter.mock.calls.filter(
+      call => call[0] === 'imageGenerationComplete'
+    );
+    
+    expect(imageCompleteCalls).toHaveLength(1);
+    expect(imageCompleteCalls[0]).toEqual(['imageGenerationComplete', {
+      prompt: 'A beautiful sunset',
+      imageUrl: 'https://example.com/generated-image.jpg'
+    }]);
   });
 });

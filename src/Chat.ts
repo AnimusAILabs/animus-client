@@ -640,25 +640,11 @@ export class ChatModule {
     * @param next Whether to send a follow-up request after image generation
     */
    private generateImageAndHandleNext(imagePrompt: string, next?: boolean): void {
-       // Emit image generation start event
-       if (this.eventEmitter) {
-           this.eventEmitter('imageGenerationStart', {
-               prompt: imagePrompt
-           });
-       }
-
        // If we have access to the generateImage method, use it and wait for completion
+       // Note: The generateImage method handles all event emissions internally
        if (this.generateImage) {
            this.generateImage(imagePrompt)
                .then((imageUrl: string) => {
-                   // Emit image generation complete event
-                   if (this.eventEmitter) {
-                       this.eventEmitter('imageGenerationComplete', {
-                           prompt: imagePrompt,
-                           imageUrl: imageUrl
-                       });
-                   }
-                   
                    if (next) {
                        this.followUpHandler.sendFollowUpRequest();
                    }
@@ -666,14 +652,8 @@ export class ChatModule {
                .catch((error: any) => {
                    console.error('Image generation failed:', error);
                    
-                   // Emit image generation error event
-                   if (this.eventEmitter) {
-                       this.eventEmitter('imageGenerationError', {
-                           prompt: imagePrompt,
-                           error: error
-                       });
-                   }
-                   
+                   // The ImageGenerator already emits the error event
+                   // Just handle the follow-up if needed
                    if (next) {
                        this.followUpHandler.sendFollowUpRequest();
                    }
