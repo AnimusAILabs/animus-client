@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ChatModule, ChatMessage } from '../src/Chat';
+import { ChatModule } from '../src/Chat';
+import type { ChatMessage } from '../src/chat/types';
 import { RequestUtil } from '../src/RequestUtil';
 import { AuthHandler } from '../src/AuthHandler';
 import type { AnimusChatOptions } from '../src/AnimusClient';
@@ -39,10 +40,8 @@ describe('ChatModule History Management', () => {
       defaultChatOptions
     );
     
-    // Add some initial messages for testing
-    // We're using private methods here for testing, hence the type casting
-    (chatModule as any).addMessageToHistory(userMessage1);
-    (chatModule as any).addMessageToHistory(assistantMessage1);
+    // Add some initial messages for testing using public methods
+    chatModule.setChatHistory([userMessage1, assistantMessage1]);
   });
 
   it('should get chat history', () => {

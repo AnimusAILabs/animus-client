@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'; // Add beforeEach, afterEach
-import { ChatModule, ChatCompletionRequest, ChatCompletionChunk, ChatCompletionResponse, Tool, ToolCall, ChatMessage } from '../src/Chat'; // Added Tool, ToolCall, ChatMessage
+import { ChatModule } from '../src/Chat';
+import type { ChatCompletionRequest, ChatCompletionChunk, ChatCompletionResponse, Tool, ToolCall, ChatMessage } from '../src/chat/types';
 import { RequestUtil, ApiError } from '../src/RequestUtil'; // Import ApiError
 import { AuthHandler } from '../src/AuthHandler';
 import type { AnimusChatOptions } from '../src/AnimusClient'; // Import type for config
@@ -118,8 +119,17 @@ describe('ChatModule', () => {
     };
 
     // Spy on history methods BEFORE making the call
-    const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
+    const addMessageSpy = vi.spyOn((chatModule as any).chatHistory, 'addUserMessageToHistory');
     const addAssistantResponseSpy = vi.spyOn(chatModule as any, 'addAssistantResponseToHistory');
+
+    // Update the StreamingHandler with the new spied method
+    (chatModule as any).streamingHandler = new (await import('../src/chat/StreamingHandler')).StreamingHandler(
+      (chatModule as any).eventEmitter,
+      (chatModule as any).conversationalTurnsManager,
+      (chatModule as any).chatHistory,
+      (chatModule as any).addAssistantResponseToHistory.bind(chatModule),
+      (chatModule as any).followUpHandler.sendFollowUpRequest.bind((chatModule as any).followUpHandler)
+    );
 
     // --- Make the call ---
     // Use unknown first for type assertion as suggested by TS error
@@ -175,7 +185,7 @@ describe('ChatModule', () => {
 
     // 6. Verify final history state (addMessageToHistory handles trimming internally)
     // Access history AFTER spies have been checked
-    const finalHistory = (chatModule as any).chatHistory;
+    const finalHistory = chatModule.getChatHistory();
     expect(finalHistory).toEqual([
         { role: 'user', content: 'Say hello', timestamp: expect.any(String) },
         { role: 'assistant', content: 'Hello world!', timestamp: expect.any(String) }
@@ -237,7 +247,7 @@ describe('ChatModule', () => {
       autoTurn: false // Default autoTurn value
     }, true); // send() always uses streaming
     // History should be: [User1, Assistant1]
-    expect((chatModule as any).chatHistory).toEqual([
+    expect(chatModule.getChatHistory()).toEqual([
         { role: 'user', content: 'User message 1', timestamp: expect.any(String) },
         { role: 'assistant', content: 'Response 1', timestamp: expect.any(String) }
     ]);
@@ -265,7 +275,7 @@ describe('ChatModule', () => {
      // After User2 added: [User1, Assistant1, User2]
      // After Assistant2 added: [User1, Assistant1, User2, Assistant2]
      // After trim(2): [User2, Assistant2]
-    expect((chatModule as any).chatHistory).toEqual([
+    expect(chatModule.getChatHistory()).toEqual([
         { role: 'user', content: 'User message 2', timestamp: expect.any(String) },
         { role: 'assistant', content: 'Response 2', timestamp: expect.any(String) }
     ]);
@@ -290,7 +300,7 @@ describe('ChatModule', () => {
       autoTurn: false // Default autoTurn value
     }, true); // send() always uses streaming
     // Final History State Check: [User3, Assistant3] (This part remains correct)
-    expect((chatModule as any).chatHistory).toEqual([
+    expect(chatModule.getChatHistory()).toEqual([
         { role: 'user', content: 'User message 3', timestamp: expect.any(String) },
         { role: 'assistant', content: 'Response 3', timestamp: expect.any(String) }
     ]);
@@ -646,7 +656,7 @@ it('should clean think tags and store reasoning when adding assistant message to
       chatModule.addAssistantResponseToHistory(rawAssistantContent);
 
       // Verify the history state
-      const history = (chatModule as any).chatHistory;
+      const history = chatModule.getChatHistory();
       expect(history.length).toBe(1);
       expect(history[0]).toEqual({
           role: 'assistant',
@@ -663,7 +673,7 @@ it('should clean think tags and store reasoning when adding assistant message to
         );
         const rawAssistantContent = '<think>Only reasoning here.</think>';
         chatModule.addAssistantResponseToHistory(rawAssistantContent);
-        const history = (chatModule as any).chatHistory;
+        const history = chatModule.getChatHistory();
         expect(history.length).toBe(1);
         expect(history[0]).toEqual({
             role: 'assistant',
@@ -680,7 +690,7 @@ it('should clean think tags and store reasoning when adding assistant message to
         );
         const rawAssistantContent = 'Just normal content.';
         chatModule.addAssistantResponseToHistory(rawAssistantContent);
-        const history = (chatModule as any).chatHistory;
+        const history = chatModule.getChatHistory();
         expect(history.length).toBe(1);
         expect(history[0]).toEqual({
             role: 'assistant',
@@ -697,7 +707,7 @@ it('should clean think tags and store reasoning when adding assistant message to
         );
         const rawAssistantContent = '   '; // Whitespace only
         chatModule.addAssistantResponseToHistory(rawAssistantContent);
-        const history = (chatModule as any).chatHistory;
+        const history = chatModule.getChatHistory();
         expect(history.length).toBe(0); // History should remain empty
     });
     it('should override configured defaults with send options', async () => {
@@ -939,8 +949,16 @@ it('should clean think tags and store reasoning when adding assistant message to
 
       const requestMock = vi.spyOn(requestUtilMock, 'request');
       const addAssistantResponseSpy = vi.spyOn(chatModule as any, 'addAssistantResponseToHistory');
-      const addMessageSpy = vi.spyOn(chatModule as any, 'addMessageToHistory');
+      const addMessageSpy = vi.spyOn((chatModule as any).chatHistory, 'addUserMessageToHistory');
 
+      // Update the StreamingHandler with the new spied method
+      (chatModule as any).streamingHandler = new (await import('../src/chat/StreamingHandler')).StreamingHandler(
+        (chatModule as any).eventEmitter,
+        (chatModule as any).conversationalTurnsManager,
+        (chatModule as any).chatHistory,
+        (chatModule as any).addAssistantResponseToHistory.bind(chatModule),
+        (chatModule as any).followUpHandler.sendFollowUpRequest.bind((chatModule as any).followUpHandler)
+      );
 
       const mockToolCallId = "call_stream_123";
       const expectedFinalToolCall: ToolCall = { // Corrected: No extra space in arguments
@@ -1161,7 +1179,7 @@ it('should clean think tags and store reasoning when adding assistant message to
       // Clear spies and mocks for the re-run part of this test logic
       requestMock.mockClear();
       addAssistantResponseSpy.mockClear();
-      vi.spyOn(chatModule as any, 'addMessageToHistory'); // Re-spy on addMessageToHistory for the new instance
+      vi.spyOn((chatModule as any).chatHistory, 'addUserMessageToHistory'); // Re-spy on addUserMessageToHistory for the new instance
       const newAddAssistantResponseSpy = vi.spyOn(chatModule as any, 'addAssistantResponseToHistory');
 
 

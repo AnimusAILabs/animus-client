@@ -1,4 +1,4 @@
-import { ToolCall } from '../Chat';
+import type { ToolCall } from '../chat/types';
 
 /**
  * Configuration interface for conversational turns feature
@@ -59,6 +59,7 @@ export interface QueuedMessage {
   groupId?: string;
   messageIndex?: number;
   totalInGroup?: number;
+  groupTimestamp?: number; // Original timestamp when the group was created
   // Image generation metadata
   messageType?: 'text' | 'image';
   imagePrompt?: string;
@@ -106,6 +107,7 @@ export interface GroupMetadata {
   messageIndex?: number;
   totalInGroup?: number;
   processedTimestamp?: number; // Timestamp when the message was actually processed (for proper ordering)
+  groupTimestamp?: number; // Original timestamp when the group was created (for reconstruction ordering)
 }
 
 /**

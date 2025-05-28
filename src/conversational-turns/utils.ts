@@ -14,7 +14,7 @@ export class SentenceExtractor {
   public static extractSentences(text: string): string[] {
     if (!text?.trim()) return [];
     
-    console.log('[SentenceExtractor] Input text:', text);
+    
     
     // Common abbreviations (English and some international)
     const abbreviations = /\b(?:Dr|Mr|Mrs|Ms|Prof|Sr|Jr|vs|etc|i\.e|e\.g|Inc|Corp|Ltd|Co|Ave|St|Rd|Blvd|Vol|No|Fig|Ref|Ch|Sec|Art|Par|cf|viz|approx|est|max|min|misc|temp|dept|govt|assn|bros|mfg|mfr|natl|intl|univ|acad|admin|assoc|corp|dept|dist|div|est|exec|govt|inst|intl|mgmt|natl|org|prof|pub|res|tech|univ)\./gi;
@@ -87,17 +87,14 @@ export class SentenceExtractor {
     // Splits on: punctuation + space + letter OR end of string OR before quotes OR emoji + space + letter
     // Uses Unicode property escape \p{Emoji} to match any emoji character
     const sentenceEnders = /[.!?]+(?=\s+[A-Za-z¿¡]|\s*$)|[.!?]+(?=\s*["'«»""])|[¿¡][^¿¡!?]*[!?]+|—|--|\p{Emoji}(?=\s+[A-Za-z¿¡])/gu;
-    console.log('[SentenceExtractor] Processed text:', processedText);
-    console.log('[SentenceExtractor] Using regex:', sentenceEnders);
+    
     
     const sentences: string[] = [];
     let lastIndex = 0;
     let match;
     
     while ((match = sentenceEnders.exec(processedText)) !== null) {
-      console.log('[SentenceExtractor] Found match:', match[0], 'at index:', match.index);
       const sentence = processedText.slice(lastIndex, match.index + match[0].length).trim();
-      console.log('[SentenceExtractor] Extracted sentence:', sentence);
       if (sentence.length > 0) {
         sentences.push(sentence);
       }
@@ -106,12 +103,11 @@ export class SentenceExtractor {
     
     // Add remaining text if any
     const remaining = processedText.slice(lastIndex).trim();
-    console.log('[SentenceExtractor] Remaining text:', remaining);
     if (remaining.length > 0) {
       sentences.push(remaining);
     }
     
-    console.log('[SentenceExtractor] Sentences before placeholder restoration:', sentences);
+    
     
     // Restore all placeholders
     const finalSentences = sentences.map(sentence => {
@@ -122,7 +118,7 @@ export class SentenceExtractor {
       return restored.trim();
     }).filter(sentence => sentence.length > 0); // Remove any empty sentences
     
-    console.log('[SentenceExtractor] Final sentences:', finalSentences);
+    
     return finalSentences;
   }
 }

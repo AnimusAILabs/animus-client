@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ChatModule, ChatMessage } from '../src/Chat';
+import { ChatModule } from '../src/Chat';
+import type { ChatMessage } from '../src/chat/types';
 import { RequestUtil } from '../src/RequestUtil';
 import { AuthHandler } from '../src/AuthHandler';
 import type { AnimusChatOptions } from '../src/AnimusClient';

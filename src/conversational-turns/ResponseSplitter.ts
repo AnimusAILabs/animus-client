@@ -23,19 +23,16 @@ export class ResponseSplitter {
     }
     
     const sentences = SentenceExtractor.extractSentences(content);
-    console.log('[ResponseSplitter] Extracted sentences:', sentences);
+    
     
     // Don't split single sentences
     if (sentences.length <= 1) {
-      console.log('[ResponseSplitter] Only one sentence, not splitting');
       return [{ content, delay: 0, turnIndex: 0, totalTurns: 1 }];
     }
     
     // Apply probability check - only split if random value is within probability
     const shouldSplit = Math.random() <= this.config.splitProbability;
-    console.log('[ResponseSplitter] Split decision:', shouldSplit, 'probability:', this.config.splitProbability);
     if (!shouldSplit) {
-      console.log('[ResponseSplitter] Probability check failed, not splitting');
       return [{ content, delay: 0, turnIndex: 0, totalTurns: 1 }];
     }
     

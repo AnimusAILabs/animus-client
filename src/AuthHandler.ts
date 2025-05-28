@@ -131,7 +131,7 @@ export class AuthHandler {
    * @throws {AuthenticationError} If fetching or processing fails.
    */
   private async fetchAndStoreDetails(): Promise<void> {
-    console.log('AuthHandler: Fetching new Animus and LiveKit details...');
+    
     try {
       // Use POST as before, adjust if your endpoint uses GET
       const response = await fetch(this.tokenProviderUrl, {
@@ -233,7 +233,6 @@ export class AuthHandler {
    */
   public async getToken(): Promise<string> {
     if (this.isAnimusTokenExpired()) {
-      console.log('AuthHandler: Animus token expired or missing, refreshing details...');
       await this.fetchAndStoreDetails(); // Refreshes both tokens
     }
     // After fetching (if needed), the token should be valid and non-null
@@ -253,7 +252,6 @@ export class AuthHandler {
    */
   public async getLiveKitDetails(context: LiveKitContext): Promise<LiveKitDetails> {
       if (this.isLiveKitTokenExpired(context)) {
-          console.log(`AuthHandler: LiveKit token for ${context} expired or missing, refreshing all details...`);
           await this.fetchAndStoreDetails(); // Refreshes all tokens
       }
 
@@ -281,7 +279,7 @@ export class AuthHandler {
    * Clears all stored token and detail information.
    */
   public clearAllDetails(): void {
-    console.log('AuthHandler: Clearing all stored details.');
+    
     this.animusToken = null;
     this.animusTokenExpiry = null;
     this.livekitVoiceToken = null;

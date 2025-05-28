@@ -138,7 +138,8 @@ export class MessageQueue {
           groupId: message.groupId,
           messageIndex: message.messageIndex,
           totalInGroup: message.totalInGroup,
-          processedTimestamp: processedTimestamp // Add the actual processing timestamp
+          processedTimestamp: processedTimestamp, // Add the actual processing timestamp
+          groupTimestamp: message.groupTimestamp // Add the original group timestamp
         },
         message.messageType || 'text',
         message.imagePrompt,

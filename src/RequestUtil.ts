@@ -93,13 +93,13 @@ export class RequestUtil {
       }
 
       try {
-        console.log(`RequestUtil: Attempt ${attempts} - ${method} ${url}`);
+        
         const response = await fetch(url, options);
 
         if (!response.ok) {
           // Check if it's a 401 error and if we can retry
           if (response.status === 401 && attempts < maxAttempts) {
-            console.log(`RequestUtil: Attempt ${attempts} failed with 401. Clearing token and retrying...`);
+            
             this.authHandler.clearAllDetails(); // Clear stored details to force refresh on next getToken()
             continue; // Go to the next iteration of the loop to retry
           }

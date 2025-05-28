@@ -101,6 +101,9 @@ function addMessage(role, text, reasoning = null, messageType = null) {
     } else if (messageType === 'turn-canceled') {
         messageElement.classList.remove('bg-gray-200', 'text-gray-800');
         messageElement.classList.add('bg-red-100', 'text-red-600', 'italic', 'border-red-300');
+    } else if (messageType === 'followup-indicator') {
+        messageElement.classList.remove('bg-gray-200', 'text-gray-800');
+        messageElement.classList.add('bg-yellow-100', 'text-yellow-600', 'italic', 'border-yellow-300', 'followup-indicator');
     }
     
     // Handle reasoning if present
@@ -344,6 +347,9 @@ async function initializeAndTest() {
                 
             } else if (messageType === 'followup') {
                 logOutput(`✅ Completed follow-up request`);
+                // Clear status for follow-up messages to prevent stuck "AI is responding" indicator
+                setInputEnabled(true, 'Connected - Ready to Chat');
+                updateStatus('Connected - Ready to Chat');
                 
                 // Remove follow-up indicator and add the message
                 const followupIndicators = chatWindow.querySelectorAll('.followup-indicator');

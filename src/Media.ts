@@ -197,11 +197,11 @@ export class MediaModule {
     // Check if it's a job ID response (indicating video processing)
     if (initialResponse && typeof initialResponse === 'object' && 'job_id' in initialResponse && initialResponse.job_id) {
       // It's a video job, start polling
-      console.log(`Video analysis job started: ${initialResponse.job_id}. Polling for results...`);
+      
       return this.pollForResult(initialResponse.job_id);
     } else {
       // Assume it's an image result (or an unexpected response)
-      console.log('Image analysis complete or non-job response received.');
+      
       return initialResponse as MediaAnalysisResultResponse; // Cast assumes direct result
     }
   }
@@ -232,7 +232,7 @@ export class MediaModule {
       try {
         const statusResponse = await this.getAnalysisStatus(jobId);
 
-        console.log(`Polling job ${jobId}: Status=${statusResponse.status}, Progress=${statusResponse.percent_complete ?? 'N/A'}%`);
+        
 
         if (statusResponse.status === 'COMPLETED') {
           return statusResponse; // Return the complete results

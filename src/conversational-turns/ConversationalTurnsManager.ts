@@ -2,7 +2,7 @@ import { ConversationalTurnsConfig, QueuedMessage, MessageCallback, EventEmitter
 import { ConversationalTurnsConfigValidator } from './config';
 import { ResponseSplitter } from './ResponseSplitter';
 import { MessageQueue } from './MessageQueue';
-import { ToolCall } from '../Chat';
+import type { ToolCall } from '../chat/types';
 
 /**
  * Main orchestrator for the conversational turns feature
@@ -60,7 +60,7 @@ export class ConversationalTurnsManager {
         imagePrompt?: string,
         hasNext?: boolean
       ) => {
-        console.log('[ConversationalTurns] Processing message with type:', messageType, 'groupMetadata:', groupMetadata);
+        
         if (onMessageCallback) {
           onMessageCallback(content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext);
         }
@@ -93,10 +93,7 @@ export class ConversationalTurnsManager {
   ): boolean {
     // Return false if feature is disabled or no content
     if (!this.messageQueue || !content) {
-      console.log('[ConversationalTurns] Not processing - disabled or no content:', {
-        hasQueue: !!this.messageQueue,
-        hasContent: !!content
-      });
+      
       return false;
     }
     
@@ -104,16 +101,16 @@ export class ConversationalTurnsManager {
     
     // Check if we should use splitting based on splitProbability
     const shouldSplit = Math.random() < (this.config?.splitProbability ?? 1.0);
-    console.log('[ConversationalTurns] Split probability check:', shouldSplit, 'probability:', this.config?.splitProbability);
+    
     
     if (!shouldSplit) {
-      console.log('[ConversationalTurns] Skipping split due to probability - using original content');
+      
       return false; // Use original content instead of splits
     }
     
     // If API provided pre-split turns, use those
     if (apiTurns && apiTurns.length > 1) {
-      console.log('[ConversationalTurns] Using API-provided turns:', apiTurns.length, 'turns');
+      
       splitMessages = apiTurns.map((turn, index) => ({
         content: turn,
         delay: index === 0 ? 0 : this.calculateDelayForTurn(turn),
@@ -122,24 +119,25 @@ export class ConversationalTurnsManager {
       }));
     } else if (this.splitter) {
       // Fall back to client-side splitting if no API turns provided
-      console.log('[ConversationalTurns] Using client-side splitting for:', content);
+      
       splitMessages = this.splitter.splitResponse(content);
-      console.log('[ConversationalTurns] Split result:', splitMessages.length, 'messages');
+      
     } else {
       // No splitter and no API turns - return false for normal processing
-      console.log('[ConversationalTurns] No splitting method available');
+      
       return false;
     }
     
     // If not split, return false to indicate normal processing should continue
     if (splitMessages.length <= 1) {
-      console.log('[ConversationalTurns] Not splitting - only', splitMessages.length, 'message(s)');
+      
       return false;
     }
     
-    // Generate a unique group ID for this set of split messages
-    const groupId = `group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    console.log('[ConversationalTurns] Creating message group:', groupId, 'with', splitMessages.length, 'messages');
+    // Generate a unique group ID and capture the timestamp for this set of split messages
+    const groupTimestamp = Date.now();
+    const groupId = `group_${groupTimestamp}_${Math.random().toString(36).substr(2, 9)}`;
+    
     
     // Convert to queued messages with group metadata
     // Don't set timestamp here - it will be set when the message is actually processed
@@ -153,14 +151,16 @@ export class ConversationalTurnsManager {
       groupId: groupId,
       messageIndex: index,
       totalInGroup: splitMessages.length,
-      // Only add violations and tool calls to the last message in the group
+      groupTimestamp: groupTimestamp, // Store the original group creation timestamp
+      // Only add violations, tool calls, and hasNext to the last message in the group
       compliance_violations: index === splitMessages.length - 1 ? complianceViolations : undefined,
-      tool_calls: index === splitMessages.length - 1 ? toolCalls : undefined
+      tool_calls: index === splitMessages.length - 1 ? toolCalls : undefined,
+      hasNext: index === splitMessages.length - 1 ? hasNext : undefined
     }));
     
     // If there's an image prompt, add an image generation message to the queue
     if (imagePrompt) {
-      console.log('[ConversationalTurns] Adding image generation to queue:', imagePrompt);
+      
       const imageDelay = this.calculateDelayForTurn(''); // Small delay for image generation
       const imageMessage: QueuedMessage = {
         content: '', // No text content for image generation
@@ -185,8 +185,7 @@ export class ConversationalTurnsManager {
     }
     
     // Enqueue the messages - they will be added to history with group metadata
-    console.log('[ConversationalTurns] Enqueueing', queuedMessages.length, 'messages with delays:',
-                queuedMessages.map(m => m.delay).join(', '));
+    
     this.messageQueue.enqueue(queuedMessages);
     
     return true; // Indicate that splitting was applied
