@@ -1,3 +1,10 @@
+# [1.17.0](https://github.com/AnimusAILabs/animus-client/compare/v1.16.0...v1.17.0) (2025-05-28)
+
+
+### Features
+
+* Don't emit more than one image event at a time ([7dc4cae](https://github.com/AnimusAILabs/animus-client/commit/7dc4caee518600ed73f7cfe70db003cdb759674a))
+
 # [1.16.0](https://github.com/AnimusAILabs/animus-client/compare/v1.15.0...v1.16.0) (2025-05-28)
 
 
