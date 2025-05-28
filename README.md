@@ -284,7 +284,7 @@ const client = new AnimusClient({
     *   `reasoning` (optional, `boolean`, default: false): For non-streaming responses, this adds a `reasoning` field to the response message. For streaming, the thinking content will be included directly in the response stream.
     *   `check_image_generation` (optional, `boolean`, default: false): When true, checks if the response contains an `image_prompt` and automatically generates an image (see **Image Generation** section below).
     *   `historySize` (optional, `number`, default: 0): Enables automatic chat history management (SDK feature).
-    *   `autoTurn` (optional, `boolean | ConversationalTurnsConfig`, default: false): Enables conversational turns with natural response splitting and typing delays.
+    *   `autoTurn` (optional, `boolean | ConversationalTurnsConfig`, default: false): Enables conversational turns with natural response splitting and typing delays. **Note:** Streaming is not supported when autoTurn is enabled.
         *   Simple usage: `autoTurn: true` (uses default settings)
         *   Advanced usage: `autoTurn: { enabled: true, splitProbability: 0.8, ... }` (see **Conversational Turns Configuration** below)
 *   `vision` (optional, `AnimusVisionOptions`): If provided, enables vision features and sets defaults.
@@ -469,6 +469,8 @@ if (responseComp.compliance_violations && responseComp.compliance_violations.len
 ### 4. Conversational Turns Configuration
 
 The SDK provides advanced conversational turns functionality that creates natural conversation flow by automatically splitting long responses into multiple messages with realistic typing delays.
+
+> **⚠️ Important:** Streaming (`stream: true`) is not supported when conversational turns (`autoTurn`) is enabled. The SDK will automatically use non-streaming mode for requests when autoTurn is active.
 
 #### Basic Usage
 
