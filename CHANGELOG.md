@@ -1,3 +1,10 @@
+# [1.18.0](https://github.com/AnimusAILabs/animus-client/compare/v1.17.0...v1.18.0) (2025-05-28)
+
+
+### Features
+
+* Adding config for max split turns to prevent too many turn splits ([fded149](https://github.com/AnimusAILabs/animus-client/commit/fded149206b30bad943ec148a361d59869590079))
+
 # [1.17.0](https://github.com/AnimusAILabs/animus-client/compare/v1.16.0...v1.17.0) (2025-05-28)
 
 
