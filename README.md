@@ -502,7 +502,9 @@ const client = new AnimusClient({
       baseTypingSpeed: 50,             // Base typing speed in WPM (words per minute)
       speedVariation: 0.3,             // ±30% speed variation for natural feel
       minDelay: 800,                   // Minimum delay between turns (ms)
-      maxDelay: 2500                   // Maximum delay between turns (ms)
+      maxDelay: 2500,                  // Maximum delay between turns (ms)
+      maxTurns: 3,                     // Maximum number of turns allowed (including hasNext)
+      maxTurnConcatProbability: 0.7    // Probability of concatenating when at maxTurns limit
     }
   }
 });
@@ -513,12 +515,14 @@ const client = new AnimusClient({
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | `boolean` | `true` | Enable/disable conversational turns |
-| `splitProbability` | `number` | `1.0` | Probability (0-1) of splitting multi-sentence responses |
+| `splitProbability` | `number` | `1.0` | Probability (0-1) of splitting responses (overridden by newlines) |
 | `shortSentenceThreshold` | `number` | `30` | Character threshold for grouping short sentences |
 | `baseTypingSpeed` | `number` | `45` | Base typing speed in words per minute |
 | `speedVariation` | `number` | `0.2` | Speed variation factor (±percentage) |
 | `minDelay` | `number` | `500` | Minimum delay between turns in milliseconds |
 | `maxDelay` | `number` | `3000` | Maximum delay between turns in milliseconds |
+| `maxTurns` | `number` | `3` | Maximum number of turns allowed (including hasNext flag) |
+| `maxTurnConcatProbability` | `number` | `0.7` | Probability (0-1) of concatenating turns when at maxTurns limit |
 
 #### Events
 
@@ -585,12 +589,17 @@ client.on('imageGenerationError', (data) => {
 
 #### How It Works
 
-1. **Response Analysis**: When a response is received, it's analyzed for sentence boundaries
-2. **Smart Splitting**: Based on `splitProbability`, multi-sentence responses may be split
-3. **Sentence Grouping**: Short sentences (below `shortSentenceThreshold`) are grouped together
-4. **Delay Calculation**: Realistic typing delays are calculated based on content length and typing speed
-5. **Sequential Delivery**: Messages are delivered with natural delays, creating conversational flow
-6. **Coordination**: Image generation and follow-up requests are properly coordinated with turn completion
+1. **Response Analysis**: When a response is received, it's analyzed for potential splitting
+2. **Probability Check**: `splitProbability` determines whether splitting occurs, except when content contains newlines (which always triggers splitting)
+3. **Smart Splitting**: If probability check passes, responses are split based on:
+   - **API Pre-split**: Use turns provided by the backend when available
+   - **Newline Splitting**: Split on newlines when content contains `\n` characters
+   - **Sentence Splitting**: Fall back to sentence-based splitting for other content
+4. **Sentence Grouping**: Short sentences (below `shortSentenceThreshold`) are grouped together
+5. **Turn Limiting**: If splitting would exceed `maxTurns` (including hasNext flag), turns are intelligently concatenated based on `maxTurnConcatProbability`
+6. **Delay Calculation**: Realistic typing delays are calculated based on content length and typing speed
+7. **Sequential Delivery**: Messages are delivered with natural delays, creating conversational flow
+8. **Coordination**: Image generation and follow-up requests are properly coordinated with turn completion
 
 #### Best Practices
 

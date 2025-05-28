@@ -24,6 +24,12 @@ export interface ConversationalTurnsConfig {
   
   /** Maximum delay between messages in milliseconds. Default: 4000 */
   maxDelay?: number;
+  
+  /** Maximum number of turns allowed (including next flag). Default: 3 */
+  maxTurns?: number;
+  
+  /** Probability (0-1) of concatenating turns when limit is exceeded. Default: 0.7 */
+  maxTurnConcatProbability?: number;
 }
 
 /**

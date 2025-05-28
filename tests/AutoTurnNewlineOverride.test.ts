@@ -41,15 +41,15 @@ describe('AutoTurn Newline Override', () => {
     expect(result).toBe(true); // Should return true indicating splitting was applied
   });
 
-  it('should force splitting when content contains newlines and client-side splitter is available', () => {
+  it('should force splitting when content contains newlines and autoTurn is enabled', () => {
     const contentWithNewlines = "First sentence.\nSecond sentence.\nThird sentence.";
     
-    // No API turns provided, but splitter should handle it
+    // Any API turns provided (indicating autoTurn=true) with newlines - should trigger splitting
     const result = manager.processResponse(
       contentWithNewlines,
       undefined,
       undefined,
-      undefined // No API turns
+      [contentWithNewlines] // API turns provided (autoTurn=true)
     );
 
     expect(result).toBe(true); // Should return true indicating splitting was applied
@@ -76,11 +76,11 @@ describe('AutoTurn Newline Override', () => {
     expect(result).toBe(false); // Should return false as no splitting capability
   });
 
-  it('should respect normal probability when content has no newlines', () => {
+  it('should respect splitProbability when content has no newlines', () => {
     const contentWithoutNewlines = "This is a single line of text without any line breaks.";
     const apiTurns = ["This is a single line", "of text without any line breaks."];
     
-    // With splitProbability = 0, this should return false
+    // When API provides multiple turns but no newlines, should respect splitProbability (0.0)
     const result = manager.processResponse(
       contentWithoutNewlines,
       undefined,
@@ -88,7 +88,7 @@ describe('AutoTurn Newline Override', () => {
       apiTurns
     );
 
-    expect(result).toBe(false); // Should return false due to low probability
+    expect(result).toBe(false); // Should return false due to splitProbability: 0.0
   });
 
   it('should handle content with only newlines at the end', () => {
@@ -125,5 +125,22 @@ describe('AutoTurn Newline Override', () => {
     );
 
     expect(result).toBe(true); // Should split due to both newlines and high probability
+  });
+
+  it('should override splitProbability when autoTurn=true and content has newlines', () => {
+    // Test the specific scenario: autoTurn=true + newlines should ignore splitProbability
+    const contentWithNewlines = "First part of message\nSecond part of message\nThird part";
+    
+    // Provide empty API turns array to indicate autoTurn=true, but no pre-split turns
+    // This forces the system to rely on client-side newline splitting
+    const result = manager.processResponse(
+      contentWithNewlines,
+      undefined,
+      undefined,
+      [] // Empty array indicates autoTurn=true but no API-provided turns
+    );
+
+    // Should return true despite splitProbability=0, because newlines override probability
+    expect(result).toBe(true);
   });
 });

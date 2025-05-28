@@ -10,7 +10,9 @@ export const DEFAULT_CONVERSATIONAL_TURNS_CONFIG: Required<ConversationalTurnsCo
   baseTypingSpeed: 38, // WPM
   speedVariation: 0.2, // ±20%
   minDelay: 1000, // ms
-  maxDelay: 4000 // ms
+  maxDelay: 4000, // ms
+  maxTurns: 3, // Maximum turns allowed (including next flag)
+  maxTurnConcatProbability: 0.7 // 70% chance to concatenate when limit exceeded
 };
 
 /**
@@ -54,6 +56,15 @@ export class ConversationalTurnsConfigValidator {
     if (config.minDelay !== undefined && config.maxDelay !== undefined &&
         config.minDelay > config.maxDelay) {
       throw new Error('conversationalTurns.minDelay cannot be greater than maxDelay');
+    }
+    
+    if (config.maxTurns !== undefined && config.maxTurns < 1) {
+      throw new Error('conversationalTurns.maxTurns must be at least 1');
+    }
+    
+    if (config.maxTurnConcatProbability !== undefined &&
+        (config.maxTurnConcatProbability < 0 || config.maxTurnConcatProbability > 1)) {
+      throw new Error('conversationalTurns.maxTurnConcatProbability must be between 0 and 1');
     }
   }
   
