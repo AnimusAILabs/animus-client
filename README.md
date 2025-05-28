@@ -520,25 +520,46 @@ const client = new AnimusClient({
 
 #### Events
 
-The SDK emits comprehensive events for conversational turns:
+The SDK uses a unified event system where all messages (regular, auto-turn, and follow-up) emit the same events:
 
 ```typescript
-// Turn-specific events
-client.on('conversationalTurnStart', (data) => {
-  console.log(`Starting turn ${data.turnIndex + 1}/${data.totalTurns}`);
-  console.log(`Content: ${data.content}`);
+// Unified message events for all message types
+client.on('messageStart', (data) => {
+  console.log(`Starting ${data.messageType} message: ${data.content}`);
+  
+  // Auto-turn specific handling
+  if (data.messageType === 'auto') {
+    console.log(`Turn ${data.turnIndex + 1}/${data.totalTurns}`);
+  }
+  
+  // Follow-up specific handling
+  if (data.messageType === 'followup') {
+    console.log('Processing follow-up request');
+  }
 });
 
-client.on('conversationalTurnComplete', (data) => {
-  console.log(`Completed turn ${data.turnIndex + 1}/${data.totalTurns}`);
+client.on('messageComplete', (data) => {
+  console.log(`Completed ${data.messageType || 'regular'} message: ${data.content}`);
+  
+  // Auto-turn specific handling
+  if (data.messageType === 'auto' && data.turnIndex !== undefined) {
+    console.log(`Turn ${data.turnIndex + 1}/${data.totalTurns} complete`);
+  }
+  
+  // All messages completed (when totalMessages is present)
+  if (data.totalMessages) {
+    console.log(`All ${data.totalMessages} messages completed`);
+    // This is when image generation and follow-up requests are triggered
+  }
 });
 
-client.on('conversationalTurnsComplete', () => {
-  console.log('All conversational turns completed');
-});
-
-client.on('conversationalTurnsCanceled', (data) => {
-  console.log(`Canceled ${data.canceledTurns} pending turns`);
+client.on('messageError', (data) => {
+  console.error(`${data.messageType || 'regular'} message error: ${data.error}`);
+  
+  // Handle cancellations (auto-turn messages that were canceled)
+  if (data.messageType === 'auto' && data.error.includes('Canceled')) {
+    console.log('Auto-turn messages were canceled due to new user input');
+  }
 });
 
 // Image generation events (when responses include image prompts)
@@ -554,6 +575,11 @@ client.on('imageGenerationError', (data) => {
   console.error(`Image generation failed: ${data.error}`);
 });
 ```
+
+**Message Types:**
+- `regular`: Standard user-initiated messages and responses
+- `auto`: Messages from conversational turns (split responses)
+- `followup`: Automatic follow-up requests when AI indicates more content
 
 #### How It Works
 
@@ -702,41 +728,38 @@ The `generateImage` method:
 - Adds the image to chat history automatically
 - Returns the image URL directly
 
-#### b) Model-Suggested Image Generation via Chat
+#### b) Automatic Image Generation via Chat
 
-When you set `check_image_generation: true`, the model can decide if an image should be generated based on the conversation. If it does decide to generate an image, the response will include an `image_prompt` field:
+When you set `check_image_generation: true`, the SDK automatically handles the entire image generation process:
 
 ```javascript
 const response = await client.chat.completions({
   messages: [{ role: 'user', content: 'Create an image of a futuristic city' }],
-  check_image_generation: true // Allow the model to suggest image generation
+  check_image_generation: true // Enable automatic image generation
 });
 
-// Check if the model suggested an image
-if (response.choices[0].message.image_prompt) {
-  const imagePrompt = response.choices[0].message.image_prompt;
-  console.log("Model suggested image prompt:", imagePrompt);
-  
-  // Generate the image using the provided prompt
-  const imageUrl = await client.generateImage(imagePrompt);
-  console.log("Generated image URL:", imageUrl);
-}
+// The SDK automatically:
+// 1. Detects if the model included an image_prompt in the response
+// 2. Generates the image using that prompt
+// 3. Adds the image to chat history
+// 4. Emits imageGeneration events for UI feedback
 ```
 
-This two-step approach gives you full control over:
-1. When to generate images (you can check the prompt first)
-2. How to handle image generation errors
-3. When to display the image in your UI
+The SDK handles everything automatically, including:
+- **Image generation**: When the model includes an `image_prompt`, the image is generated automatically
+- **Event emission**: `imageGenerationStart`, `imageGenerationComplete`, and `imageGenerationError` events
+- **Chat history**: The generated image is automatically added to conversation history
+- **Error handling**: Failed image generation is handled gracefully with error events
 
 #### c) Image Response Format
 
-When an image is generated, it is added to the chat history as an assistant message with HTML content:
+When an image is generated, it is automatically added to the chat history as an assistant message with this format:
 
 ```html
-<img src='https://image-url.example/generated-image.jpg' description='The image prompt text' />
+<image description='The image prompt text' />
 ```
 
-This gives the AI the context of the image it generated and displayed to the user.
+This provides the AI with context about the image that was generated and displayed to the user.
 
 ---
 
