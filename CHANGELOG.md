@@ -1,3 +1,10 @@
+# [1.19.0](https://github.com/AnimusAILabs/animus-client/compare/v1.18.0...v1.19.0) (2025-05-29)
+
+
+### Features
+
+* adding intelligent message cancellation / turn splitting ([44754d7](https://github.com/AnimusAILabs/animus-client/commit/44754d7b0770b97b176e5ef26940023e1fc70356))
+
 # [1.18.0](https://github.com/AnimusAILabs/animus-client/compare/v1.17.0...v1.18.0) (2025-05-28)
 
 
