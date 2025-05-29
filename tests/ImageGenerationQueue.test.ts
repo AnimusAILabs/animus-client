@@ -40,7 +40,6 @@ describe('Image Generation Queue Integration', () => {
         autoTurn: {
           enabled: true,
           splitProbability: 1.0, // Always split for testing
-          shortSentenceThreshold: 30,
           baseTypingSpeed: 45,
           speedVariation: 0.2,
           minDelay: 100, // Short delays for testing

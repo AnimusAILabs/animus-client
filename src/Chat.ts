@@ -366,19 +366,43 @@ export class ChatModule {
       // Generate a unique conversation ID
       const conversationId = `conv_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       
+      // Update the conversation ID in the conversational turns manager
+      if (this.conversationalTurnsManager) {
+          this.conversationalTurnsManager.updateConversationId(conversationId);
+      }
+      
       // Cancel any pending conversational turns when a new message is sent
       if (this.conversationalTurnsManager?.isActive()) {
           const canceledCount = this.conversationalTurnsManager.cancelPendingMessages();
           if (canceledCount > 0) {
-              
+              // Cancel any follow-up requests associated with ALL canceled groups
+              const canceledGroupIds = this.conversationalTurnsManager.getCanceledGroupIds();
+              canceledGroupIds.forEach(groupId => {
+                  this.followUpHandler.cancelFollowUpForGroup(groupId);
+              });
           }
       }
       
+      // Reset canceled group tracking for new conversation
+      this.conversationalTurnsManager?.resetCanceledGroups();
+      
       // Clear any pending follow-up requests when a new message is sent
+      // This handles both conversational turn follow-ups and standalone follow-ups
       if (this.followUpHandler.hasPendingFollowUpRequest()) {
-          
+          // Cancel any pending follow-up by using its tracked group ID
+          const pendingGroupId = this.followUpHandler.getPendingFollowUpGroupId();
+          if (pendingGroupId) {
+              this.followUpHandler.cancelFollowUpForGroup(pendingGroupId);
+          }
+
           this.followUpHandler.clearPendingFollowUpRequest();
       }
+      
+      // Reset the image generation flag when a new message is sent
+      this.followUpHandler.setJustGeneratedImage(false);
+      
+      // Reset the sequential follow-up counter when user sends a new message
+      this.followUpHandler.resetSequentialFollowUpCount();
       
       // Emit the messageStart event
       if (this.eventEmitter) {
@@ -645,12 +669,18 @@ export class ChatModule {
        if (this.generateImage) {
            this.generateImage(imagePrompt)
                .then((imageUrl: string) => {
+                   // Set flag to indicate we just generated an image
+                   this.followUpHandler.setJustGeneratedImage(true);
+                   
                    if (next) {
                        this.followUpHandler.sendFollowUpRequest();
                    }
                })
                .catch((error: any) => {
                    console.error('Image generation failed:', error);
+                   
+                   // Set flag even on error to prevent follow-up loops
+                   this.followUpHandler.setJustGeneratedImage(true);
                    
                    // The ImageGenerator already emits the error event
                    // Just handle the follow-up if needed

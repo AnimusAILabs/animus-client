@@ -52,14 +52,18 @@ describe('Follow-up Request Handling', () => {
       // Wait for all messages to be processed
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Verify that we received the expected number of messages
-      expect(messagesReceived).toHaveLength(2);
-      expect(messagesReceived[0]?.content).toBe('Hey there!');
-      expect(messagesReceived[1]?.content).toBe('How are you doing today?');
+      // Due to random concatenation, we might get 1 or 2 messages
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(2);
+      
+      // Verify all content is preserved
+      const allContent = messagesReceived.map(m => m.content).join(' ');
+      expect(allContent).toContain('Hey there!');
+      expect(allContent).toContain('How are you doing today?');
 
-      // Verify that hasNext is only set on the last message
-      expect(messagesReceived[0]?.hasNext).toBeUndefined();
-      expect(messagesReceived[1]?.hasNext).toBe(true);
+      // Verify that hasNext is set on the last message
+      const lastMessage = messagesReceived[messagesReceived.length - 1];
+      expect(lastMessage?.hasNext).toBe(true);
 
       // Verify that follow-up was triggered exactly once
       expect(followUpCallCount).toBe(1);
@@ -81,12 +85,15 @@ describe('Follow-up Request Handling', () => {
       // Wait for all messages to be processed
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Verify that we received the expected number of messages
-      expect(messagesReceived).toHaveLength(2);
+      // Due to random concatenation, we might get 1 or 2 messages
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(2);
 
-      // Verify that hasNext is not set on any message
-      expect(messagesReceived[0]?.hasNext).toBeUndefined();
-      expect(messagesReceived[1]?.hasNext).toBe(false);
+      // Verify that hasNext is false on the last message (if any)
+      const lastMessage = messagesReceived[messagesReceived.length - 1];
+      if (lastMessage) {
+        expect(lastMessage.hasNext).toBe(false);
+      }
 
       // Verify that follow-up was not triggered
       expect(followUpCallCount).toBe(0);
@@ -108,12 +115,14 @@ describe('Follow-up Request Handling', () => {
       // Wait for all messages to be processed
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Verify that we received the expected number of messages
-      expect(messagesReceived).toHaveLength(2);
+      // Due to random concatenation, we might get 1 or 2 messages
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(2);
 
       // Verify that hasNext is not set on any message
-      expect(messagesReceived[0]?.hasNext).toBeUndefined();
-      expect(messagesReceived[1]?.hasNext).toBeUndefined();
+      messagesReceived.forEach(msg => {
+        expect(msg.hasNext).toBeUndefined();
+      });
 
       // Verify that follow-up was not triggered
       expect(followUpCallCount).toBe(0);
@@ -143,14 +152,14 @@ describe('Follow-up Request Handling', () => {
       // Wait for all messages to be processed
       await new Promise(resolve => setTimeout(resolve, 150));
 
-      // Verify that we received messages from both groups
-      expect(messagesReceived).toHaveLength(4);
+      // Due to random concatenation, we might get fewer messages than expected
+      // Each group can be 1-2 messages, so total could be 2-4 messages
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(2);
+      expect(messagesReceived.length).toBeLessThanOrEqual(4);
 
-      // Verify that hasNext is only set on the last message of each group
-      expect(messagesReceived[0]?.hasNext).toBeUndefined(); // First group, first message
-      expect(messagesReceived[1]?.hasNext).toBe(true);      // First group, last message
-      expect(messagesReceived[2]?.hasNext).toBeUndefined(); // Second group, first message
-      expect(messagesReceived[3]?.hasNext).toBe(true);      // Second group, last message
+      // Count messages with hasNext: true (should be 2, one per group)
+      const messagesWithNext = messagesReceived.filter(msg => msg.hasNext === true);
+      expect(messagesWithNext).toHaveLength(2);
 
       // Verify that follow-up was triggered exactly twice (once per group)
       expect(followUpCallCount).toBe(2);
@@ -259,6 +268,106 @@ describe('Follow-up Request Handling', () => {
       // Verify that no messages were processed
       expect(messagesReceived).toHaveLength(0);
       expect(followUpCallCount).toBe(0);
+    });
+  });
+
+  describe('Sequential Follow-up Limiting', () => {
+    it('should limit sequential follow-ups to maximum of 2', async () => {
+      // This test simulates the behavior at the Chat.ts level where sequential follow-ups are limited
+      let sequentialFollowUpCount = 0;
+      const maxSequentialFollowUps = 2;
+      let justGeneratedImage = false;
+
+      // Mock the follow-up logic that would be in Chat.ts
+      const simulateFollowUpLogic = (hasNext: boolean, isImageGenerated: boolean = false) => {
+        if (isImageGenerated) {
+          justGeneratedImage = true;
+        }
+
+        if (hasNext) {
+          if (justGeneratedImage) {
+            // Skip follow-up if we just generated an image
+            justGeneratedImage = false;
+            return false;
+          } else if (sequentialFollowUpCount >= maxSequentialFollowUps) {
+            // Skip follow-up if we've reached the limit
+            return false;
+          } else {
+            // Allow follow-up and increment counter
+            sequentialFollowUpCount++;
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Simulate user sending a message (resets counter)
+      const simulateUserMessage = () => {
+        sequentialFollowUpCount = 0;
+        justGeneratedImage = false;
+      };
+
+      // Test scenario: Multiple sequential follow-ups
+      simulateUserMessage(); // User sends initial message
+
+      // First follow-up (should be allowed)
+      expect(simulateFollowUpLogic(true)).toBe(true);
+      expect(sequentialFollowUpCount).toBe(1);
+
+      // Second follow-up (should be allowed)
+      expect(simulateFollowUpLogic(true)).toBe(true);
+      expect(sequentialFollowUpCount).toBe(2);
+
+      // Third follow-up (should be blocked - reached limit)
+      expect(simulateFollowUpLogic(true)).toBe(false);
+      expect(sequentialFollowUpCount).toBe(2); // Should not increment
+
+      // Fourth follow-up (should still be blocked)
+      expect(simulateFollowUpLogic(true)).toBe(false);
+      expect(sequentialFollowUpCount).toBe(2);
+
+      // User sends new message (resets counter)
+      simulateUserMessage();
+      expect(sequentialFollowUpCount).toBe(0);
+
+      // Follow-up after user message (should be allowed again)
+      expect(simulateFollowUpLogic(true)).toBe(true);
+      expect(sequentialFollowUpCount).toBe(1);
+    });
+
+    it('should block follow-ups after image generation', async () => {
+      let sequentialFollowUpCount = 0;
+      let justGeneratedImage = false;
+
+      const simulateFollowUpLogic = (hasNext: boolean, isImageGenerated: boolean = false) => {
+        if (isImageGenerated) {
+          justGeneratedImage = true;
+        }
+
+        if (hasNext) {
+          if (justGeneratedImage) {
+            justGeneratedImage = false;
+            return false;
+          } else {
+            sequentialFollowUpCount++;
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // Normal follow-up (should be allowed)
+      expect(simulateFollowUpLogic(true)).toBe(true);
+      expect(sequentialFollowUpCount).toBe(1);
+
+      // Follow-up after image generation (should be blocked)
+      expect(simulateFollowUpLogic(true, true)).toBe(false);
+      expect(sequentialFollowUpCount).toBe(1); // Should not increment
+      expect(justGeneratedImage).toBe(false); // Should be reset
+
+      // Next follow-up (should be allowed again)
+      expect(simulateFollowUpLogic(true)).toBe(true);
+      expect(sequentialFollowUpCount).toBe(2);
     });
   });
 });

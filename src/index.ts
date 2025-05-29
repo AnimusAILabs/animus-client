@@ -46,7 +46,6 @@ export type {
 
 export {
   ConversationalTurnsManager,
-  ResponseSplitter,
   MessageQueue,
   ConversationalTurnsConfigValidator,
   DEFAULT_CONVERSATIONAL_TURNS_CONFIG,

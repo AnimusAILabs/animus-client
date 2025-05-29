@@ -8,6 +8,8 @@ export class MessageQueue {
   private currentTimeout?: NodeJS.Timeout;
   private isProcessing: boolean = false;
   private processedCount: number = 0;
+  private currentGroupId?: string;
+  private canceledMessageIds: Set<string> = new Set();
   
   constructor(
     private onMessageCallback: MessageCallback,
@@ -24,6 +26,58 @@ export class MessageQueue {
     if (!this.isProcessing) {
       this.processNext();
     }
+  }
+  
+  /**
+   * Get the group IDs of messages that would be canceled
+   * @returns Array of unique group IDs from pending messages
+   */
+  public getCanceledGroupIds(): string[] {
+    const groupIds = new Set<string>();
+    this.queue.forEach(message => {
+      if (message.groupId) {
+        groupIds.add(message.groupId);
+      }
+    });
+    return Array.from(groupIds);
+  }
+  
+  /**
+   * Get the specific message IDs that would be canceled
+   * @returns Array of unique message IDs from pending messages
+   */
+  public getCanceledMessageIds(): string[] {
+    const messageIds: string[] = [];
+    this.queue.forEach(message => {
+      if (message.groupId && message.messageIndex !== undefined) {
+        messageIds.push(`${message.groupId}_${message.messageIndex}`);
+      }
+    });
+    return messageIds;
+  }
+  
+  /**
+   * Set the canceled message IDs to prevent them from being processed
+   * @param messageIds Array of message IDs to cancel
+   */
+  public setCanceledMessageIds(messageIds: string[]): void {
+    messageIds.forEach(id => this.canceledMessageIds.add(id));
+  }
+  
+  /**
+   * Update the conversation ID for a new conversation
+   * @param conversationId The new conversation ID
+   */
+  public updateConversationId(conversationId: string): void {
+    this.conversationId = conversationId;
+  }
+  
+  /**
+   * Get the current active group ID
+   * @returns The group ID of the most recently processed group
+   */
+  public getCurrentGroupId(): string | undefined {
+    return this.currentGroupId;
   }
   
   /**
@@ -109,6 +163,9 @@ export class MessageQueue {
     this.isProcessing = true;
     const message = this.queue.shift()!;
     
+    // Track the current group ID
+    this.currentGroupId = message.groupId;
+    
     // Emit message start event
     if (this.eventEmitter) {
       this.eventEmitter('messageStart', {
@@ -123,6 +180,15 @@ export class MessageQueue {
     }
     
     const processMessage = () => {
+      // Check if this message has been canceled before processing
+      const messageId = `${message.groupId}_${message.messageIndex}`;
+      if (this.canceledMessageIds && this.canceledMessageIds.has(messageId)) {
+        // Skip processing this canceled message
+        this.processedCount++;
+        this.processNext();
+        return;
+      }
+      
       // Set the timestamp when the message is actually processed (not when queued)
       // This ensures proper chronological ordering in chat history
       const processedTimestamp = Date.now();

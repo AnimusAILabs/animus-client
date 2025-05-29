@@ -27,9 +27,8 @@ describe('AutoTurn Limiting Feature', () => {
     // Base configuration with new autoTurn limiting settings
     config = {
       enabled: true,
-      splitProbability: 1.0, // Always split for testing
+      splitProbability: 0.6, // Default probability for testing
       maxTurns: 3, // Maximum 3 turns (including next flag)
-      maxTurnConcatProbability: 0.7, // 70% probability for concatenation
       minDelay: 10,
       maxDelay: 20
     };
@@ -64,15 +63,10 @@ describe('AutoTurn Limiting Feature', () => {
   });
 
   describe('Turn Concatenation Logic', () => {
-    it('should concatenate 3 turns to 2 turns with 70% probability', async () => {
-      // Mock Math.random to return values that trigger concatenation
+    it('should concatenate turns when using API turns', async () => {
+      // Mock Math.random to ensure we use turns (splitProbability check)
       const originalRandom = Math.random;
-      let callCount = 0;
-      Math.random = vi.fn(() => {
-        callCount++;
-        // First call for splitProbability (should split), second for concatenation probability
-        return callCount === 1 ? 0.5 : 0.6; // 0.6 < 0.7, so should concatenate
-      });
+      Math.random = vi.fn(() => 0.5); // 50% < 100% (use turns)
 
       const turns = ['Turn 1', 'Turn 2', 'Turn 3', 'Turn 4'];
       const processed = manager.processResponse(
@@ -87,28 +81,21 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Should have concatenated to 3 turns (4 > maxTurns of 3)
-      expect(messagesReceived).toHaveLength(3);
-      expect(messagesReceived[0]?.content).toBe('Turn 1 Turn 2'); // Concatenated
-      expect(messagesReceived[1]?.content).toBe('Turn 3');
-      expect(messagesReceived[2]?.content).toBe('Turn 4');
+      // Should have concatenated to some number between 1 and 3 turns (random)
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(3);
 
       Math.random = originalRandom;
     });
 
-    it('should not concatenate 3 turns when probability check fails', async () => {
-      // Mock Math.random to return values that prevent concatenation
+    it('should not use turns when probability check fails', async () => {
+      // Mock Math.random to prevent using turns
       const originalRandom = Math.random;
-      let callCount = 0;
-      Math.random = vi.fn(() => {
-        callCount++;
-        // First call for splitProbability (should split), second for concatenation probability
-        return callCount === 1 ? 0.5 : 0.8; // 0.8 > 0.7, so should not concatenate
-      });
+      Math.random = vi.fn(() => 0.8); // 80% > 60% (don't use turns)
 
       const turns = ['Turn 1', 'Turn 2', 'Turn 3'];
       const processed = manager.processResponse(
-        'Turn 1\nTurn 2\nTurn 3',
+        'Turn 1 Turn 2 Turn 3', // No newlines to avoid Priority 1 logic
         undefined,
         undefined,
         turns,
@@ -116,14 +103,8 @@ describe('AutoTurn Limiting Feature', () => {
         false
       );
 
-      expect(processed).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Should keep all 3 turns (at the limit)
-      expect(messagesReceived).toHaveLength(3);
-      expect(messagesReceived[0]?.content).toBe('Turn 1');
-      expect(messagesReceived[1]?.content).toBe('Turn 2');
-      expect(messagesReceived[2]?.content).toBe('Turn 3');
+      // Should return false (don't use turns, process normally)
+      expect(processed).toBe(false);
 
       Math.random = originalRandom;
     });
@@ -193,10 +174,14 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Should remain as 2 turns (within limit, no concatenation needed)
-      expect(messagesReceived).toHaveLength(2);
-      expect(messagesReceived[0]?.content).toBe('Turn 1');
-      expect(messagesReceived[1]?.content).toBe('Turn 2');
+      // Due to random concatenation, could be 1 or 2 turns
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(2);
+      
+      // Verify all content is preserved
+      const allContent = messagesReceived.map(m => m.content).join(' ');
+      expect(allContent).toContain('Turn 1');
+      expect(allContent).toContain('Turn 2');
     });
 
     it('should not concatenate 1 turn with next=true', async () => {
@@ -244,9 +229,9 @@ describe('AutoTurn Limiting Feature', () => {
     });
 
     it('should handle edge case of exactly maxTurns with next=false', async () => {
-      // Mock Math.random to prevent concatenation
+      // Mock Math.random to use turns
       const originalRandom = Math.random;
-      Math.random = vi.fn(() => 0.8); // > 0.7, should not concatenate
+      Math.random = vi.fn(() => 0.5); // < 1.0, should use turns
 
       const turns = ['Turn 1', 'Turn 2', 'Turn 3'];
       const processed = manager.processResponse(
@@ -261,8 +246,9 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Should keep exactly 3 turns (at the limit)
-      expect(messagesReceived).toHaveLength(3);
+      // Should concatenate to some number between 1 and 3 turns (random)
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(3);
 
       Math.random = originalRandom;
     });
@@ -306,24 +292,26 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Should not concatenate since within high limit
-      expect(messagesReceived).toHaveLength(3);
+      // With high maxTurns, random concatenation can still occur
+      // Should receive between 1 and 3 messages (random concatenation)
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+      expect(messagesReceived.length).toBeLessThanOrEqual(3);
     });
   });
 
   describe('Probability Configuration', () => {
-    it('should respect custom concatenation probability', async () => {
-      // Test with 0% concatenation probability
+    it('should respect custom split probability', async () => {
+      // Test with 0% split probability (should not use turns)
       const customConfig = {
         ...config,
-        maxTurnConcatProbability: 0.0
+        splitProbability: 0.0
       };
       
       const customManager = new ConversationalTurnsManager(customConfig, mockCallback, mockEventEmitter);
       
       const turns = ['Turn 1', 'Turn 2', 'Turn 3'];
       const processed = customManager.processResponse(
-        'Turn 1\nTurn 2\nTurn 3',
+        'Turn 1 Turn 2 Turn 3',
         undefined,
         undefined,
         turns,
@@ -331,18 +319,15 @@ describe('AutoTurn Limiting Feature', () => {
         false
       );
 
-      expect(processed).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // With 0% probability, should not concatenate (keep 3 turns)
-      expect(messagesReceived).toHaveLength(3);
+      // With 0% probability, should not use turns at all
+      expect(processed).toBe(false);
     });
 
-    it('should handle 100% concatenation probability', async () => {
-      // Test with 100% concatenation probability
+    it('should handle 100% split probability', async () => {
+      // Test with 100% split probability (should always use turns)
       const customConfig = {
         ...config,
-        maxTurnConcatProbability: 1.0
+        splitProbability: 1.0
       };
       
       const customManager = new ConversationalTurnsManager(customConfig, mockCallback, mockEventEmitter);
@@ -360,15 +345,15 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // With 100% probability, should always concatenate (4 > maxTurns of 3)
+      // With 100% probability, should always use turns and concatenate randomly
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
       expect(messagesReceived.length).toBeLessThanOrEqual(3);
     });
 
-    it('should use default 70% probability when not configured', async () => {
-      // Create config without maxTurnConcatProbability
+    it('should use default 60% probability when not configured', async () => {
+      // Create config without explicit splitProbability
       const defaultConfig = {
         enabled: true,
-        splitProbability: 1.0,
         maxTurns: 3,
         minDelay: 10,
         maxDelay: 20
@@ -378,7 +363,7 @@ describe('AutoTurn Limiting Feature', () => {
       
       // Mock Math.random to test default probability
       const originalRandom = Math.random;
-      Math.random = vi.fn(() => 0.6); // Should trigger concatenation with default 0.7
+      Math.random = vi.fn(() => 0.5); // Should use turns with default 0.6
 
       const turns = ['Turn 1', 'Turn 2', 'Turn 3', 'Turn 4'];
       const processed = defaultManager.processResponse(
@@ -393,7 +378,8 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Should concatenate with default probability (4 > maxTurns of 3)
+      // Should use turns and concatenate randomly
+      expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
       expect(messagesReceived.length).toBeLessThanOrEqual(3);
 
       Math.random = originalRandom;
@@ -421,9 +407,13 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Verify violations are preserved on the last message
-      expect(mockCallback).toHaveBeenCalledWith(
-        "Turn 4",
+      // Verify violations are preserved on the last message (regardless of concatenation)
+      const lastMessage = messagesReceived[messagesReceived.length - 1];
+      expect(lastMessage).toBeDefined();
+      
+      // Check that mockCallback was called with violations on the last call
+      expect(mockCallback).toHaveBeenLastCalledWith(
+        expect.any(String),
         violations,
         undefined,
         expect.any(Object),
@@ -455,9 +445,9 @@ describe('AutoTurn Limiting Feature', () => {
       expect(processed).toBe(true);
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Verify tool calls are preserved on the last message
-      expect(mockCallback).toHaveBeenCalledWith(
-        "Turn 4",
+      // Verify tool calls are preserved on the last message (regardless of concatenation)
+      expect(mockCallback).toHaveBeenLastCalledWith(
+        expect.any(String),
         undefined,
         toolCalls,
         expect.any(Object),
@@ -707,28 +697,12 @@ describe('AutoTurn Limiting Feature', () => {
       }).toThrow('conversationalTurns.maxTurns must be at least 1');
     });
 
-    it('should validate maxTurnConcatProbability configuration', () => {
-      expect(() => {
-        new ConversationalTurnsManager({
-          enabled: true,
-          maxTurnConcatProbability: 1.5 // Invalid: must be between 0 and 1
-        }, mockCallback, mockEventEmitter);
-      }).toThrow('conversationalTurns.maxTurnConcatProbability must be between 0 and 1');
-      
-      expect(() => {
-        new ConversationalTurnsManager({
-          enabled: true,
-          maxTurnConcatProbability: -0.1 // Invalid: must be between 0 and 1
-        }, mockCallback, mockEventEmitter);
-      }).toThrow('conversationalTurns.maxTurnConcatProbability must be between 0 and 1');
-    });
 
     it('should accept valid configuration values', () => {
       expect(() => {
         new ConversationalTurnsManager({
           enabled: true,
           maxTurns: 5,
-          maxTurnConcatProbability: 0.8
         }, mockCallback, mockEventEmitter);
       }).not.toThrow();
     });

@@ -5,14 +5,14 @@ import { ConversationalTurnsConfig } from './types';
  */
 export const DEFAULT_CONVERSATIONAL_TURNS_CONFIG: Required<ConversationalTurnsConfig> = {
   enabled: false,
-  splitProbability: 0.4, // 40% chance to split for testing
-  shortSentenceThreshold: 30,
+  splitProbability: 0.6, // 60% chance to split for natural variation
   baseTypingSpeed: 38, // WPM
   speedVariation: 0.2, // ±20%
   minDelay: 1000, // ms
   maxDelay: 4000, // ms
   maxTurns: 3, // Maximum turns allowed (including next flag)
-  maxTurnConcatProbability: 0.7 // 70% chance to concatenate when limit exceeded
+  followUpDelay: 2000, // 2 seconds delay before follow-up requests
+  maxSequentialFollowUps: 2 // Maximum sequential follow-ups allowed
 };
 
 /**
@@ -34,10 +34,6 @@ export class ConversationalTurnsConfigValidator {
     
     if (config.baseTypingSpeed !== undefined && config.baseTypingSpeed <= 0) {
       throw new Error('conversationalTurns.baseTypingSpeed must be positive');
-    }
-    
-    if (config.shortSentenceThreshold !== undefined && config.shortSentenceThreshold < 0) {
-      throw new Error('conversationalTurns.shortSentenceThreshold must be non-negative');
     }
     
     if (config.speedVariation !== undefined &&
@@ -62,9 +58,13 @@ export class ConversationalTurnsConfigValidator {
       throw new Error('conversationalTurns.maxTurns must be at least 1');
     }
     
-    if (config.maxTurnConcatProbability !== undefined &&
-        (config.maxTurnConcatProbability < 0 || config.maxTurnConcatProbability > 1)) {
-      throw new Error('conversationalTurns.maxTurnConcatProbability must be between 0 and 1');
+    
+    if (config.followUpDelay !== undefined && config.followUpDelay < 0) {
+      throw new Error('conversationalTurns.followUpDelay must be non-negative');
+    }
+    
+    if (config.maxSequentialFollowUps !== undefined && config.maxSequentialFollowUps < 0) {
+      throw new Error('conversationalTurns.maxSequentialFollowUps must be non-negative');
     }
   }
   

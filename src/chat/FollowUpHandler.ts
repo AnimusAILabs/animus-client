@@ -27,12 +27,27 @@ export class FollowUpHandler {
   
   // Track pending follow-up requests
   private pendingFollowUpRequest: boolean = false;
+  private followUpRequestInProgress: boolean = false;
+  
+  // Track if we just generated an image to limit follow-ups
+  private justGeneratedImage: boolean = false;
+  
+  // Track sequential follow-ups to limit them
+  private sequentialFollowUpCount: number = 0;
+  private readonly maxSequentialFollowUps: number;
+  private readonly followUpDelay: number;
   
   // Store last request parameters for follow-up requests
   private lastRequestParameters?: any;
   
   // System message reference
   private systemMessage?: ChatMessage;
+  
+  // Track the group ID associated with pending follow-up
+  private pendingFollowUpGroupId?: string;
+  
+  // Track the timeout for pending follow-up to allow cancellation
+  private pendingFollowUpTimeout?: NodeJS.Timeout;
 
   constructor(
     requestUtil: RequestUtil,
@@ -58,6 +73,11 @@ export class FollowUpHandler {
     this.addAssistantResponseToHistory = addAssistantResponseToHistory;
     this.generateImageAndHandleNext = generateImageAndHandleNext;
     this.systemMessage = systemMessage;
+    
+    // Extract follow-up configuration from autoTurn config
+    const autoTurnConfig = typeof config?.autoTurn === 'object' ? config.autoTurn : undefined;
+    this.followUpDelay = autoTurnConfig?.followUpDelay ?? 2000; // Default 2 seconds
+    this.maxSequentialFollowUps = autoTurnConfig?.maxSequentialFollowUps ?? 2; // Default 2
   }
 
   /**
@@ -106,7 +126,47 @@ export class FollowUpHandler {
   public clearPendingFollowUpRequest(): void {
     if (this.pendingFollowUpRequest) {
       this.pendingFollowUpRequest = false;
+      this.pendingFollowUpGroupId = undefined;
     }
+  }
+  
+  /**
+   * Get the group ID of the pending follow-up request
+   * @returns The group ID of the pending follow-up, or undefined if none
+   */
+  public getPendingFollowUpGroupId(): string | undefined {
+    return this.pendingFollowUpGroupId;
+  }
+
+  /**
+   * Cancel follow-up request if it's associated with a canceled group
+   * @param canceledGroupId The group ID that was canceled
+   */
+  public cancelFollowUpForGroup(canceledGroupId: string): void {
+    if (this.pendingFollowUpRequest && this.pendingFollowUpGroupId === canceledGroupId) {
+      this.pendingFollowUpRequest = false;
+      this.pendingFollowUpGroupId = undefined;
+      
+      // Cancel the pending timeout to prevent the follow-up from executing
+      if (this.pendingFollowUpTimeout) {
+        clearTimeout(this.pendingFollowUpTimeout);
+        this.pendingFollowUpTimeout = undefined;
+      }
+    }
+  }
+
+  /**
+   * Sets the flag indicating we just generated an image
+   */
+  public setJustGeneratedImage(value: boolean): void {
+    this.justGeneratedImage = value;
+  }
+
+  /**
+   * Resets the sequential follow-up counter when user sends a new message
+   */
+  public resetSequentialFollowUpCount(): void {
+    this.sequentialFollowUpCount = 0;
   }
 
   /**
@@ -125,10 +185,35 @@ export class FollowUpHandler {
    * This is called when the response has next=true
    */
   public sendFollowUpRequest(): void {
-    // Use a short delay to make the follow-up feel natural
-    setTimeout(() => {
+    // Check if we've exceeded the maximum sequential follow-ups
+    if (this.sequentialFollowUpCount >= this.maxSequentialFollowUps) {
+      return;
+    }
+    
+    // Check if we just generated an image (should limit follow-ups)
+    if (this.justGeneratedImage) {
+      return;
+    }
+    
+    // Prevent multiple concurrent follow-up requests for the same response
+    if (this.pendingFollowUpRequest) {
+      return;
+    }
+    
+    // Set pending flag to prevent concurrent requests
+    this.pendingFollowUpRequest = true;
+    
+    // Track the group ID for this follow-up request
+    // If there's no conversational turns group, use a unique ID for this follow-up
+    this.pendingFollowUpGroupId = this.conversationalTurnsManager?.getCurrentGroupId() || `followup_${Date.now()}`;
+    
+    // Increment the sequential follow-up counter
+    this.sequentialFollowUpCount++;
+    
+    // Use configurable delay to make the follow-up feel natural
+    this.pendingFollowUpTimeout = setTimeout(() => {
       this.makeFollowUpApiRequest();
-    }, 1000); // 1 second delay to feel natural
+    }, this.followUpDelay);
   }
 
   /**
@@ -137,9 +222,24 @@ export class FollowUpHandler {
    */
   private async makeFollowUpApiRequest(): Promise<void> {
     try {
+      // Check if the follow-up was canceled (group was canceled)
+      if (!this.pendingFollowUpRequest) {
+        return; // Follow-up was canceled, don't make the request
+      }
+      
+      // Set flag to indicate request is in progress
+      this.followUpRequestInProgress = true;
+      
+      // Clear the timeout since we're now executing
+      this.pendingFollowUpTimeout = undefined;
+      
+      // Double-check if the follow-up was canceled while we were waiting
+      if (!this.pendingFollowUpRequest) {
+        return; // Follow-up was canceled during the delay
+      }
+      
       // Prepare the API request with current history (no new user message)
       const messagesToSend = [this.systemMessage!];
-      
       // Add history if applicable
       const historySize = this.config?.historySize ?? 0;
       if (historySize > 0 && this.chatHistory.getHistoryLength() > 0) {
@@ -178,6 +278,12 @@ export class FollowUpHandler {
       // Make the API request
       const response = await this.requestUtil.request('POST', '/chat/completions', completionRequest, false);
       const jsonResponse = response as ChatCompletionResponse;
+      
+      // Final check: if the follow-up was canceled while the API request was in progress,
+      // don't process the response
+      if (!this.pendingFollowUpRequest) {
+        return; // Follow-up was canceled while API request was in progress
+      }
       
       // Process the response the same way as normal responses
       const choice = jsonResponse.choices?.[0];
@@ -233,6 +339,11 @@ export class FollowUpHandler {
           if (turnsProcessed) {
             // If turns were processed, store the follow-up request for later
             this.pendingFollowUpRequest = true;
+          } else if (this.justGeneratedImage) {
+            // If we just generated an image, don't trigger another follow-up to prevent loops
+            this.justGeneratedImage = false; // Reset the flag
+          } else if (this.sequentialFollowUpCount >= this.maxSequentialFollowUps) {
+            // If we've reached the max sequential follow-ups, don't trigger another
           } else {
             // Handle follow-up immediately if no turns were processed
             this.sendFollowUpRequest();
@@ -246,6 +357,10 @@ export class FollowUpHandler {
           error: error instanceof Error ? error.message : String(error)
         });
       }
+    } finally {
+      // Clear the pending flag regardless of success or failure
+      this.pendingFollowUpRequest = false;
+      this.followUpRequestInProgress = false;
     }
   }
 }

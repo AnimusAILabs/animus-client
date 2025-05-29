@@ -124,11 +124,11 @@ async function main() {
         autoTurn: {
           enabled: true,
           splitProbability: 0.8,        // 80% chance to split multi-sentence responses
-          shortSentenceThreshold: 25,   // Group sentences shorter than 25 chars
           baseTypingSpeed: 50,          // 50 WPM base typing speed
           speedVariation: 0.3,          // ±30% speed variation
           minDelay: 800,                // Minimum 800ms delay between turns
-          maxDelay: 2500                // Maximum 2.5s delay between turns
+          maxDelay: 2500,               // Maximum 2.5s delay between turns
+          maxTurns: 3                   // Maximum number of turns allowed
         }
       }
     });
@@ -498,13 +498,13 @@ const client = new AnimusClient({
     autoTurn: {
       enabled: true,                    // Enable conversational turns
       splitProbability: 0.8,           // 80% chance to split multi-sentence responses
-      shortSentenceThreshold: 25,      // Group sentences shorter than 25 characters
       baseTypingSpeed: 50,             // Base typing speed in WPM (words per minute)
       speedVariation: 0.3,             // ±30% speed variation for natural feel
       minDelay: 800,                   // Minimum delay between turns (ms)
       maxDelay: 2500,                  // Maximum delay between turns (ms)
       maxTurns: 3,                     // Maximum number of turns allowed (including hasNext)
-      maxTurnConcatProbability: 0.7    // Probability of concatenating when at maxTurns limit
+      followUpDelay: 2000,             // Delay before sending follow-up requests (ms)
+      maxSequentialFollowUps: 2        // Maximum sequential follow-ups allowed before requiring user input
     }
   }
 });
@@ -515,14 +515,14 @@ const client = new AnimusClient({
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | `boolean` | `true` | Enable/disable conversational turns |
-| `splitProbability` | `number` | `1.0` | Probability (0-1) of splitting responses (overridden by newlines) |
-| `shortSentenceThreshold` | `number` | `30` | Character threshold for grouping short sentences |
+| `splitProbability` | `number` | `0.6` | Probability (0-1) of splitting responses (overridden by newlines) |
 | `baseTypingSpeed` | `number` | `45` | Base typing speed in words per minute |
 | `speedVariation` | `number` | `0.2` | Speed variation factor (±percentage) |
 | `minDelay` | `number` | `500` | Minimum delay between turns in milliseconds |
 | `maxDelay` | `number` | `3000` | Maximum delay between turns in milliseconds |
 | `maxTurns` | `number` | `3` | Maximum number of turns allowed (including hasNext flag) |
-| `maxTurnConcatProbability` | `number` | `0.7` | Probability (0-1) of concatenating turns when at maxTurns limit |
+| `followUpDelay` | `number` | `2000` | Delay in milliseconds before sending follow-up requests |
+| `maxSequentialFollowUps` | `number` | `2` | Maximum sequential follow-ups allowed before requiring user input |
 
 #### Events
 
@@ -590,16 +590,14 @@ client.on('imageGenerationError', (data) => {
 #### How It Works
 
 1. **Response Analysis**: When a response is received, it's analyzed for potential splitting
-2. **Probability Check**: `splitProbability` determines whether splitting occurs, except when content contains newlines (which always triggers splitting)
-3. **Smart Splitting**: If probability check passes, responses are split based on:
-   - **API Pre-split**: Use turns provided by the backend when available
-   - **Newline Splitting**: Split on newlines when content contains `\n` characters
-   - **Sentence Splitting**: Fall back to sentence-based splitting for other content
-4. **Sentence Grouping**: Short sentences (below `shortSentenceThreshold`) are grouped together
-5. **Turn Limiting**: If splitting would exceed `maxTurns` (including hasNext flag), turns are intelligently concatenated based on `maxTurnConcatProbability`
-6. **Delay Calculation**: Realistic typing delays are calculated based on content length and typing speed
-7. **Sequential Delivery**: Messages are delivered with natural delays, creating conversational flow
-8. **Coordination**: Image generation and follow-up requests are properly coordinated with turn completion
+2. **Priority-Based Processing**: The system follows a clear priority order:
+   - **Priority 1**: If autoTurn is enabled AND content has newlines → **ALWAYS** split on newlines (ignores probability and pre-split turns)
+   - **Priority 2**: If no newlines but pre-split turns are available → Apply `splitProbability` to decide whether to use them
+   - **Priority 3**: Otherwise → Process normally without splitting
+3. **Turn Limiting**: If splitting would exceed `maxTurns` (including hasNext flag), turns are intelligently concatenated using a 70% probability with natural variation
+4. **Delay Calculation**: Realistic typing delays are calculated based on content length and typing speed
+5. **Sequential Delivery**: Messages are delivered with natural delays, creating conversational flow
+6. **Coordination**: Image generation and follow-up requests are properly coordinated with turn completion
 
 #### Best Practices
 
@@ -607,6 +605,65 @@ client.on('imageGenerationError', (data) => {
 - **baseTypingSpeed**: 40-60 WPM feels natural for most users
 - **speedVariation**: 0.2-0.4 adds realistic human-like variation
 - **Delays**: Keep minDelay ≥ 500ms and maxDelay ≤ 4000ms for good UX
+
+#### Follow-Up Request Management
+
+The SDK includes intelligent follow-up request management to prevent infinite loops while maintaining natural conversation flow:
+
+- **Sequential Limiting**: `maxSequentialFollowUps` (default: 2) limits how many follow-up requests can occur in a row before requiring user input
+- **Image Generation Protection**: Follow-up requests are automatically blocked immediately after image generation to prevent loops
+- **Configurable Delay**: `followUpDelay` (default: 2000ms) controls the natural pause before follow-up requests
+- **User Reset**: All follow-up counters and flags are reset when the user sends a new message
+
+**Example Configuration:**
+```typescript
+autoTurn: {
+  enabled: true,
+  followUpDelay: 1500,        // 1.5 second delay before follow-ups
+  maxSequentialFollowUps: 1   // Allow only 1 follow-up before requiring user input
+}
+```
+
+#### Message Cancellation
+
+The SDK automatically handles message cancellation when users send new messages while previous operations are still in progress. This ensures clean conversation flow and prevents out-of-order responses.
+
+**Automatic Cancellation Behavior:**
+
+- **Conversational Turns**: When a user sends a new message while conversational turns are being processed, any pending (unprocessed) turns are automatically canceled
+- **Follow-Up Requests**: Pending follow-up requests are canceled when a new user message is sent
+- **History Preservation**: Already-processed messages remain in chat history to maintain conversation context
+- **Clean State**: The SDK ensures no orphaned responses appear after user interruption
+
+**Example Scenario:**
+```typescript
+// User sends a message that triggers conversational turns
+client.chat.send("Tell me about renewable energy");
+
+// While turns are being processed, user sends another message
+client.chat.send("Actually, tell me about solar panels instead");
+
+// Result:
+// - Any unprocessed turns from the first message are canceled
+// - Already-processed turns remain in history
+// - The second message is processed normally
+// - No out-of-order responses occur
+```
+
+**Events During Cancellation:**
+```typescript
+client.on('messageError', (data) => {
+  if (data.messageType === 'auto' && data.error.includes('Canceled')) {
+    console.log('Auto-turn messages were canceled due to new user input');
+  }
+  
+  if (data.messageType === 'followup' && data.error.includes('Canceled')) {
+    console.log('Follow-up request was canceled due to new user input');
+  }
+});
+```
+
+This cancellation system works automatically and requires no configuration. It ensures that users always receive relevant, timely responses without confusion from delayed or out-of-order messages.
 
 ---
 

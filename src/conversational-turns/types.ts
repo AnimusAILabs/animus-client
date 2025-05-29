@@ -10,9 +10,6 @@ export interface ConversationalTurnsConfig {
   /** Probability (0-1) of splitting multi-sentence responses. Default: 0.6 */
   splitProbability?: number;
   
-  /** Minimum character length for short sentences to group together. Default: 30 */
-  shortSentenceThreshold?: number;
-  
   /** Base typing speed in WPM for delay calculation. Default: 45 */
   baseTypingSpeed?: number;
   
@@ -28,8 +25,11 @@ export interface ConversationalTurnsConfig {
   /** Maximum number of turns allowed (including next flag). Default: 3 */
   maxTurns?: number;
   
-  /** Probability (0-1) of concatenating turns when limit is exceeded. Default: 0.7 */
-  maxTurnConcatProbability?: number;
+  /** Delay in milliseconds before sending follow-up requests. Default: 2000 */
+  followUpDelay?: number;
+  
+  /** Maximum number of sequential follow-up requests allowed before requiring user input. Default: 2 */
+  maxSequentialFollowUps?: number;
 }
 
 /**

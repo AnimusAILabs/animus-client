@@ -1,6 +1,5 @@
 import { ConversationalTurnsConfig, QueuedMessage, MessageCallback, EventEmitter } from './types';
 import { ConversationalTurnsConfigValidator } from './config';
-import { ResponseSplitter } from './ResponseSplitter';
 import { MessageQueue } from './MessageQueue';
 import type { ToolCall } from '../chat/types';
 
@@ -9,11 +8,11 @@ import type { ToolCall } from '../chat/types';
  * Manages splitting, queuing, and event emission
  */
 export class ConversationalTurnsManager {
-  private splitter?: ResponseSplitter;
   private messageQueue?: MessageQueue;
   private config?: ConversationalTurnsConfig;
   private onMessageCallback?: MessageCallback;
   private conversationId: string;
+  private canceledMessageIds: Set<string> = new Set();
   
   constructor(
     config?: ConversationalTurnsConfig,
@@ -48,8 +47,6 @@ export class ConversationalTurnsManager {
     
     // Initialize components if feature is enabled
     if (config?.enabled && onMessageCallback) {
-      this.splitter = new ResponseSplitter(config);
-      
       // Create a callback that adds messages to history with group metadata
       const groupAwareCallback = (
         content: string | null,
@@ -60,6 +57,12 @@ export class ConversationalTurnsManager {
         imagePrompt?: string,
         hasNext?: boolean
       ) => {
+        // Check if this specific message was canceled
+        const messageId = `${groupMetadata?.groupId}_${groupMetadata?.messageIndex}`;
+        if (messageId && this.canceledMessageIds.has(messageId)) {
+          // Skip processing canceled messages - don't add them to history
+          return;
+        }
         
         if (onMessageCallback) {
           onMessageCallback(content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext);
@@ -68,7 +71,6 @@ export class ConversationalTurnsManager {
       
       this.messageQueue = new MessageQueue(groupAwareCallback, eventEmitter, this.conversationId);
     } else {
-      this.splitter = undefined;
       this.messageQueue = undefined;
     }
   }
@@ -93,64 +95,40 @@ export class ConversationalTurnsManager {
   ): boolean {
     // Return false if feature is disabled or no content
     if (!this.messageQueue || !content) {
-      
       return false;
     }
     
     let splitMessages: { content: string; delay: number; turnIndex: number; totalTurns: number }[];
     
-    // Check if content contains newlines
-    const hasNewlines = content.includes('\n');
-    
-    // Check splitProbability - but newlines override this
-    const shouldSplit = hasNewlines || Math.random() < (this.config?.splitProbability ?? 1.0);
-    
-    // If probability check fails and no newlines, don't split
-    if (!shouldSplit) {
-      return false;
-    }
-    
-    // Splitting logic:
-    // 1. If API provided multiple pre-split turns (autoTurn=true, backend split) → use those
-    // 2. If autoTurn=true AND content has newlines → split on newlines (overrides probability)
-    // 3. If autoTurn=true AND single turn with newlines → split that single turn on newlines
-    
-    // If API provided pre-split turns (multiple), use those
-    if (apiTurns && apiTurns.length > 1) {
+    // Priority 1: If autoTurn is true AND content has newlines → ALWAYS force splitting on newlines
+    // (ignore probability, ignore pre-split turns)
+    if (content.includes('\n') && apiTurns !== undefined) {
+      const lines = content.split('\n').filter(line => line.trim().length > 0);
       
-      splitMessages = apiTurns.map((turn, index) => ({
-        content: turn,
-        delay: index === 0 ? 0 : this.calculateDelayForTurn(turn),
-        turnIndex: index,
-        totalTurns: apiTurns.length
-      }));
-    } else if (hasNewlines && apiTurns) {
-      // If autoTurn=true (apiTurns exists) AND content has newlines → split on newlines
-      const lines = content.split('\n').filter(line => line.trim());
-      if (lines.length > 1) {
-        splitMessages = lines.map((line, index) => ({
-          content: line.trim(),
-          delay: index === 0 ? 0 : this.calculateDelayForTurn(line.trim()),
-          turnIndex: index,
-          totalTurns: lines.length
-        }));
-      } else {
-        // Single line after filtering, no splitting needed
-        return false;
+      // If we have newlines in the original content but only 1 line after filtering,
+      // still process it as a single turn (the presence of newlines indicates intent to split)
+      if (lines.length === 0) {
+        return false; // No content to process
       }
-    } else {
-      // No splitting conditions met - return false for normal processing
-      return false;
-    }
-    
-    // If not split, return false to indicate normal processing should continue
-    if (splitMessages.length <= 1) {
       
+      // Apply turn limiting with concatenation to newline-split content
+      splitMessages = this.applyTurnLimiting(lines, hasNext);
+    }
+    // Priority 2: If no newlines but we have pre-split turns → apply probability
+    else if (apiTurns && apiTurns.length > 1) {
+      const shouldUseTurns = Math.random() < (this.config?.splitProbability ?? 0.6);
+      
+      if (!shouldUseTurns) {
+        return false; // Don't use turns, process normally
+      }
+      
+      // Apply turn limiting with concatenation
+      splitMessages = this.applyTurnLimiting(apiTurns, hasNext);
+    }
+    // Priority 3: No newlines and no pre-split turns → don't process
+    else {
       return false;
     }
-    
-    // Apply autoTurn limiting logic
-    splitMessages = this.applyAutoTurnLimiting(splitMessages, hasNext);
     
     // Generate a unique group ID and capture the timestamp for this set of split messages
     const groupTimestamp = Date.now();
@@ -236,11 +214,95 @@ export class ConversationalTurnsManager {
   }
   
   /**
+   * Apply turn limiting with concatenation logic
+   * @param turns Array of turn content strings
+   * @param hasNext Whether there's a follow-up request
+   * @returns Array of processed turn messages
+   */
+  private applyTurnLimiting(
+    turns: string[],
+    hasNext?: boolean
+  ): { content: string; delay: number; turnIndex: number; totalTurns: number }[] {
+    const maxTurns = this.config?.maxTurns ?? 3;
+    
+    // Calculate the maximum possible turns (accounting for hasNext)
+    const maxPossibleTurns = hasNext ? maxTurns - 1 : maxTurns;
+    
+    // Determine the upper limit for concatenation
+    const upperLimit = Math.min(turns.length, maxPossibleTurns);
+    
+    // Randomly choose target turns between 1 and upperLimit
+    const targetTurns = 1 + Math.floor(Math.random() * upperLimit);
+    
+    // Concatenate turns to fit within target
+    return this.concatenateTurns(turns, targetTurns);
+  }
+  
+  /**
+   * Concatenate turns intelligently to fit within target count
+   * @param turns Array of turn content strings
+   * @param targetCount Target number of turns
+   * @returns Concatenated turns
+   */
+  private concatenateTurns(
+    turns: string[],
+    targetCount: number
+  ): { content: string; delay: number; turnIndex: number; totalTurns: number }[] {
+    if (turns.length <= targetCount) {
+      return turns.map((turn, index) => ({
+        content: turn.trim(),
+        delay: index === 0 ? 0 : this.calculateDelayForTurn(turn.trim()),
+        turnIndex: index,
+        totalTurns: turns.length
+      }));
+    }
+    
+    const result: { content: string; delay: number; turnIndex: number; totalTurns: number }[] = [];
+    
+    // Calculate how many turns to put in each group
+    // Distribute turns as evenly as possible across target groups
+    const baseTurnsPerGroup = Math.floor(turns.length / targetCount);
+    const extraTurns = turns.length % targetCount;
+    
+    let currentIndex = 0;
+    
+    for (let groupIndex = 0; groupIndex < targetCount; groupIndex++) {
+      // Some groups get one extra turn to distribute remainder evenly
+      const turnsInThisGroup = baseTurnsPerGroup + (groupIndex < extraTurns ? 1 : 0);
+      
+      const group = turns.slice(currentIndex, currentIndex + turnsInThisGroup);
+      const concatenatedContent = group.map(turn => turn.trim()).join(' ');
+      
+      result.push({
+        content: concatenatedContent,
+        delay: groupIndex === 0 ? 0 : this.calculateDelayForTurn(concatenatedContent),
+        turnIndex: groupIndex,
+        totalTurns: targetCount
+      });
+      
+      currentIndex += turnsInThisGroup;
+    }
+    
+    return result;
+  }
+
+  /**
    * Cancel any pending messages (called when user sends new message)
    * @returns Number of messages that were canceled
    */
   public cancelPendingMessages(): number {
     if (!this.messageQueue) return 0;
+    
+    // Get the specific message IDs that will be canceled (only pending ones)
+    const canceledMessageIds = this.messageQueue.getCanceledMessageIds();
+    
+    // Track these specific message IDs to prevent them from being added to history
+    // Note: This does NOT affect already-processed messages from the same group
+    canceledMessageIds.forEach(messageId => this.canceledMessageIds.add(messageId));
+    
+    // Also set the canceled message IDs in the MessageQueue to prevent processing
+    this.messageQueue.setCanceledMessageIds(canceledMessageIds);
+    
     return this.messageQueue.cancelRemaining();
   }
   
@@ -250,6 +312,42 @@ export class ConversationalTurnsManager {
   public clear(): void {
     if (this.messageQueue) {
       this.messageQueue.clear();
+    }
+    // Clear canceled message IDs when clearing the manager
+    this.canceledMessageIds.clear();
+  }
+  
+  /**
+   * Get the current active group ID (for follow-up cancellation)
+   * @returns The group ID of the most recently processed group, or undefined
+   */
+  public getCurrentGroupId(): string | undefined {
+    return this.messageQueue?.getCurrentGroupId();
+  }
+  
+  /**
+   * Get the group IDs that were canceled
+   * @returns Array of group IDs that were canceled
+   */
+  public getCanceledGroupIds(): string[] {
+    return this.messageQueue?.getCanceledGroupIds() || [];
+  }
+  
+  /**
+   * Reset canceled message tracking when a new conversation starts
+   */
+  public resetCanceledGroups(): void {
+    this.canceledMessageIds.clear();
+  }
+  
+  /**
+   * Update the conversation ID for a new conversation
+   * @param conversationId The new conversation ID
+   */
+  public updateConversationId(conversationId: string): void {
+    this.conversationId = conversationId;
+    if (this.messageQueue) {
+      this.messageQueue.updateConversationId(conversationId);
     }
   }
   
@@ -289,116 +387,5 @@ export class ConversationalTurnsManager {
    */
   public getConfig(): ConversationalTurnsConfig | undefined {
     return this.config;
-  }
-  
-  /**
-   * Update just the splitter configuration without reinitializing everything
-   * @param config New configuration to apply to the splitter
-   */
-  public updateSplitterConfig(config: ConversationalTurnsConfig): void {
-    if (this.splitter) {
-      this.splitter.updateConfig(config);
-    }
-    this.config = config;
-  }
-  
-  /**
-   * Apply autoTurn limiting logic to split messages
-   * @param splitMessages Array of split messages
-   * @param hasNext Whether there's a follow-up request
-   * @returns Modified array of split messages respecting turn limits
-   */
-  private applyAutoTurnLimiting(
-    splitMessages: { content: string; delay: number; turnIndex: number; totalTurns: number }[],
-    hasNext?: boolean
-  ): { content: string; delay: number; turnIndex: number; totalTurns: number }[] {
-    const maxTurns = this.config?.maxTurns ?? 3;
-    const maxTurnConcatProbability = this.config?.maxTurnConcatProbability ?? 0.7;
-    
-    // Calculate total turns including next flag
-    const totalTurns = splitMessages.length + (hasNext ? 1 : 0);
-    
-    // If within limit, no concatenation needed
-    if (totalTurns <= maxTurns) {
-      return splitMessages;
-    }
-    
-    // Determine if we should concatenate
-    let shouldConcatenate = false;
-    
-    if (totalTurns > maxTurns) {
-      // Always concatenate if exceeds maxTurns
-      shouldConcatenate = true;
-    } else if (totalTurns === maxTurns) {
-      // Use probability if exactly at maxTurns (this case won't be reached due to <= check above)
-      shouldConcatenate = Math.random() < maxTurnConcatProbability;
-    }
-    
-    if (!shouldConcatenate) {
-      return splitMessages;
-    }
-    
-    // Calculate target number of turns (accounting for next flag)
-    let targetTurns: number;
-    if (hasNext) {
-      // If hasNext, we need to leave room for the next turn
-      // So target = maxTurns - 1 (to account for the next turn)
-      targetTurns = maxTurns - 1;
-    } else {
-      // If no hasNext, target should be maxTurns
-      targetTurns = maxTurns;
-    }
-    
-    // Ensure we have at least 1 turn
-    const finalTargetTurns = Math.max(1, targetTurns);
-    
-    // Concatenate messages to fit within target
-    return this.concatenateMessages(splitMessages, finalTargetTurns);
-  }
-  
-  /**
-   * Concatenate messages intelligently to fit within target count
-   * @param messages Array of messages to concatenate
-   * @param targetCount Target number of messages
-   * @returns Concatenated messages
-   */
-  private concatenateMessages(
-    messages: { content: string; delay: number; turnIndex: number; totalTurns: number }[],
-    targetCount: number
-  ): { content: string; delay: number; turnIndex: number; totalTurns: number }[] {
-    if (messages.length <= targetCount) {
-      return messages;
-    }
-    
-    const result: { content: string; delay: number; turnIndex: number; totalTurns: number }[] = [];
-    
-    // Calculate how many messages to put in each group
-    // Distribute messages as evenly as possible across target groups
-    const baseMessagesPerGroup = Math.floor(messages.length / targetCount);
-    const extraMessages = messages.length % targetCount;
-    
-    let currentIndex = 0;
-    
-    for (let groupIndex = 0; groupIndex < targetCount; groupIndex++) {
-      // Some groups get one extra message to distribute remainder evenly
-      const messagesInThisGroup = baseMessagesPerGroup + (groupIndex < extraMessages ? 1 : 0);
-      
-      const group = messages.slice(currentIndex, currentIndex + messagesInThisGroup);
-      const concatenatedContent = group.map(msg => msg.content).join(' ');
-      
-      // Use the delay of the last message in the group
-      const delay = group[group.length - 1]?.delay ?? 0;
-      
-      result.push({
-        content: concatenatedContent,
-        delay: delay,
-        turnIndex: groupIndex,
-        totalTurns: targetCount
-      });
-      
-      currentIndex += messagesInThisGroup;
-    }
-    
-    return result;
   }
 }

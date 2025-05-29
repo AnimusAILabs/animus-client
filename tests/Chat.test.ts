@@ -1286,7 +1286,6 @@ it('should clean think tags and store reasoning when adding assistant message to
         autoTurn: {
           enabled: true,
           splitProbability: 1.0, // Always process turns for this test
-          shortSentenceThreshold: 30,
           baseTypingSpeed: 45,
           speedVariation: 0.2,
           minDelay: 500,
@@ -1374,9 +1373,10 @@ it('should clean think tags and store reasoning when adding assistant message to
       expect(response.choices[0]?.message.next).toBe(true);
 
       // 3. Wait for the automatic follow-up request (with timeout)
-      await new Promise(resolve => setTimeout(resolve, 1100)); // Wait slightly longer than the 1s delay
+      await new Promise(resolve => setTimeout(resolve, 2100)); // Wait slightly longer than the 2s delay
 
       // 4. Verify follow-up request was made automatically
+      // Should be exactly 2 calls: initial + follow-up (fixed with proper guard)
       expect(requestMock).toHaveBeenCalledTimes(2);
       expect(requestMock).toHaveBeenNthCalledWith(2,
         'POST',
@@ -1385,7 +1385,10 @@ it('should clean think tags and store reasoning when adding assistant message to
           messages: expect.arrayContaining([
             { role: 'system', content: defaultChatOptions.systemMessage },
             expect.objectContaining({ role: 'user', content: 'Tell me about autoTurn' }), // Original user message
-            expect.objectContaining({ role: 'assistant', content: 'This is a long response that was split' }) // Assistant response
+            expect.objectContaining({
+              role: 'assistant',
+              content: expect.stringContaining('This is a long response that was split') // Should contain the split content
+            })
           ]),
           autoTurn: true,
           max_tokens: 150 // Should use reduced tokens for follow-up
@@ -1402,7 +1405,6 @@ it('should clean think tags and store reasoning when adding assistant message to
         autoTurn: {
           enabled: true,
           splitProbability: 1.0, // Always process turns for this test
-          shortSentenceThreshold: 30,
           baseTypingSpeed: 45,
           speedVariation: 0.2,
           minDelay: 500,

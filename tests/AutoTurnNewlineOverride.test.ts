@@ -15,7 +15,6 @@ describe('AutoTurn Newline Override', () => {
     config = {
       enabled: true,
       splitProbability: 0.0, // Set to 0 so normally no splitting would occur
-      shortSentenceThreshold: 30,
       baseTypingSpeed: 45,
       speedVariation: 0.2,
       minDelay: 800,
