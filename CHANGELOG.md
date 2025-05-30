@@ -1,3 +1,10 @@
+# [1.20.0](https://github.com/AnimusAILabs/animus-client/compare/v1.19.0...v1.20.0) (2025-05-30)
+
+
+### Features
+
+* Remove splitProbability from conversational turns configuration ([37f41f5](https://github.com/AnimusAILabs/animus-client/commit/37f41f596f3e7f98a8d605ad96046d9868473b3f))
+
 # [1.19.0](https://github.com/AnimusAILabs/animus-client/compare/v1.18.0...v1.19.0) (2025-05-29)
 
 
