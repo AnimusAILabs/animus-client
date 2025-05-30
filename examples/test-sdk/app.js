@@ -20,7 +20,6 @@ const toolsInput = document.getElementById('tools-input');
 const toggleTurnsSettingsButton = document.getElementById('toggle-turns-settings');
 const turnsSettingsContent = document.getElementById('turns-settings-content');
 const toggleTurnsText = document.getElementById('toggle-turns-text');
-const splitProbabilityInput = document.getElementById('split-probability-input');
 const shortSentenceThresholdInput = document.getElementById('short-sentence-threshold-input');
 const baseTypingSpeedInput = document.getElementById('base-typing-speed-input');
 const speedVariationInput = document.getElementById('speed-variation-input');
@@ -168,7 +167,6 @@ async function initializeAndTest() {
         // --- Read initial config FROM the form elements ---
         const initialConversationalTurnsConfig = {
             enabled: autoTurnInput.checked,
-            splitProbability: parseFloat(splitProbabilityInput.value) || 1.0,
             shortSentenceThreshold: parseInt(shortSentenceThresholdInput.value, 10) || 30,
             baseTypingSpeed: parseInt(baseTypingSpeedInput.value, 10) || 45,
             speedVariation: parseFloat(speedVariationInput.value) || 0.2,
@@ -557,7 +555,6 @@ function updateChatConfig() {
         // Create conversational turns configuration from form values
         const conversationalTurnsConfig = {
             enabled: autoTurnInput.checked,
-            splitProbability: parseFloat(splitProbabilityInput.value) || 1.0,
             shortSentenceThreshold: parseInt(shortSentenceThresholdInput.value, 10) || 30,
             baseTypingSpeed: parseInt(baseTypingSpeedInput.value, 10) || 45,
             speedVariation: parseFloat(speedVariationInput.value) || 0.2,
@@ -662,7 +659,6 @@ document.addEventListener('DOMContentLoaded', () => {
             autoTurnInput, // Include auto turn checkbox
             toolsInput,
             // Conversational turns advanced settings
-            splitProbabilityInput,
             shortSentenceThresholdInput,
             baseTypingSpeedInput,
             speedVariationInput,

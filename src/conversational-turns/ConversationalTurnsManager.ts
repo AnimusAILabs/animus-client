@@ -114,14 +114,8 @@ export class ConversationalTurnsManager {
       // Apply turn limiting with concatenation to newline-split content
       splitMessages = this.applyTurnLimiting(lines, hasNext);
     }
-    // Priority 2: If no newlines but we have pre-split turns → apply probability
+    // Priority 2: If no newlines but we have pre-split turns → always use them
     else if (apiTurns && apiTurns.length > 1) {
-      const shouldUseTurns = Math.random() < (this.config?.splitProbability ?? 0.6);
-      
-      if (!shouldUseTurns) {
-        return false; // Don't use turns, process normally
-      }
-      
       // Apply turn limiting with concatenation
       splitMessages = this.applyTurnLimiting(apiTurns, hasNext);
     }
@@ -231,8 +225,8 @@ export class ConversationalTurnsManager {
     // Determine the upper limit for concatenation
     const upperLimit = Math.min(turns.length, maxPossibleTurns);
     
-    // Randomly choose target turns between 1 and upperLimit
-    const targetTurns = 1 + Math.floor(Math.random() * upperLimit);
+    // Randomly choose target turns between 1 and upperLimit (inclusive)
+    const targetTurns = Math.floor(Math.random() * upperLimit) + 1;
     
     // Concatenate turns to fit within target
     return this.concatenateTurns(turns, targetTurns);

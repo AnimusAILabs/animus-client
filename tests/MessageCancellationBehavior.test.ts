@@ -18,7 +18,6 @@ describe('Message Cancellation Behavior', () => {
     systemMessage: 'You are a helpful assistant.',
     autoTurn: {
       enabled: true,
-      splitProbability: 1.0, // Always split for predictable testing
       baseTypingSpeed: 20, // Very fast for testing
       minDelay: 1000,
       maxDelay: 2000,

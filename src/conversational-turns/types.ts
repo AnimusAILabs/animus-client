@@ -7,8 +7,6 @@ export interface ConversationalTurnsConfig {
   /** Enable/disable the feature. Default: false */
   enabled: boolean;
   
-  /** Probability (0-1) of splitting multi-sentence responses. Default: 0.6 */
-  splitProbability?: number;
   
   /** Base typing speed in WPM for delay calculation. Default: 45 */
   baseTypingSpeed?: number;

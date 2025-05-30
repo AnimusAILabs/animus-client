@@ -39,7 +39,6 @@ describe('Image Generation Queue Integration', () => {
         systemMessage: 'Test system message',
         autoTurn: {
           enabled: true,
-          splitProbability: 1.0, // Always split for testing
           baseTypingSpeed: 45,
           speedVariation: 0.2,
           minDelay: 100, // Short delays for testing

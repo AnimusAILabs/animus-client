@@ -76,8 +76,7 @@ describe('Follow-up Configuration', () => {
       model: 'test-model',
       systemMessage: 'You are a helpful assistant.',
       autoTurn: {
-        enabled: true,
-        splitProbability: 0.8
+        enabled: true
         // followUpDelay and maxSequentialFollowUps not specified
       }
     };

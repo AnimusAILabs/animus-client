@@ -1280,12 +1280,11 @@ it('should clean think tags and store reasoning when adding assistant message to
   // --- Tests for AutoTurn Feature ---
   describe('ChatModule - AutoTurn Feature', () => {
     it('should handle API-provided turns and next field in non-streaming response', async () => {
-      // Configure ChatModule with autoTurn enabled and splitProbability: 1.0 to ensure turns are always processed
+      // Configure ChatModule with autoTurn enabled to ensure turns are always processed
       const autoTurnOptions: AnimusChatOptions = {
         ...defaultChatOptions,
         autoTurn: {
           enabled: true,
-          splitProbability: 1.0, // Always process turns for this test
           baseTypingSpeed: 45,
           speedVariation: 0.2,
           minDelay: 500,
@@ -1404,7 +1403,6 @@ it('should clean think tags and store reasoning when adding assistant message to
         ...defaultChatOptions,
         autoTurn: {
           enabled: true,
-          splitProbability: 1.0, // Always process turns for this test
           baseTypingSpeed: 45,
           speedVariation: 0.2,
           minDelay: 500,
@@ -1447,8 +1445,7 @@ it('should clean think tags and store reasoning when adding assistant message to
         '/chat/completions',
         expect.objectContaining({
           autoTurn: expect.objectContaining({
-            enabled: true,
-            splitProbability: 1.0
+            enabled: true
           })
         }),
         false

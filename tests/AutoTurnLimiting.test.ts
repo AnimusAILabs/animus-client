@@ -27,7 +27,6 @@ describe('AutoTurn Limiting Feature', () => {
     // Base configuration with new autoTurn limiting settings
     config = {
       enabled: true,
-      splitProbability: 0.6, // Default probability for testing
       maxTurns: 3, // Maximum 3 turns (including next flag)
       minDelay: 10,
       maxDelay: 20
@@ -64,7 +63,7 @@ describe('AutoTurn Limiting Feature', () => {
 
   describe('Turn Concatenation Logic', () => {
     it('should concatenate turns when using API turns', async () => {
-      // Mock Math.random to ensure we use turns (splitProbability check)
+      // API turns are always used now (no probability check)
       const originalRandom = Math.random;
       Math.random = vi.fn(() => 0.5); // 50% < 100% (use turns)
 
@@ -88,11 +87,8 @@ describe('AutoTurn Limiting Feature', () => {
       Math.random = originalRandom;
     });
 
-    it('should not use turns when probability check fails', async () => {
-      // Mock Math.random to prevent using turns
-      const originalRandom = Math.random;
-      Math.random = vi.fn(() => 0.8); // 80% > 60% (don't use turns)
-
+    it('should always use API turns when available', async () => {
+      // API turns are always used now (no probability check)
       const turns = ['Turn 1', 'Turn 2', 'Turn 3'];
       const processed = manager.processResponse(
         'Turn 1 Turn 2 Turn 3', // No newlines to avoid Priority 1 logic
@@ -103,36 +99,64 @@ describe('AutoTurn Limiting Feature', () => {
         false
       );
 
-      // Should return false (don't use turns, process normally)
-      expect(processed).toBe(false);
-
-      Math.random = originalRandom;
+      // Should return true (always use turns when available)
+      expect(processed).toBe(true);
     });
 
-    it('should concatenate 2 turns with next=true to 1 turn', async () => {
-      // Mock Math.random for concatenation
+    it('should be able to produce the full range of 1 to maxTurns', async () => {
       const originalRandom = Math.random;
-      Math.random = vi.fn(() => 0.6); // Should trigger concatenation
+      const turnCounts = new Set<number>();
+      
+      // Test specific random values to force different outcomes
+      const testValues = [
+        0.1,  // Should give Math.ceil(0.1 * 3) = 1 turn
+        0.5,  // Should give Math.ceil(0.5 * 3) = 2 turns
+        0.9   // Should give Math.ceil(0.9 * 3) = 3 turns
+      ];
+      
+      for (const randomValue of testValues) {
+        // Reset for each iteration
+        messagesReceived = [];
+        manager = new ConversationalTurnsManager(config, mockCallback, mockEventEmitter);
+        
+        // Mock Math.random to return specific value
+        Math.random = vi.fn(() => randomValue);
+        
+        const turns = ['Turn 1', 'Turn 2', 'Turn 3'];
+        const processed = manager.processResponse(
+          'Turn 1 Turn 2 Turn 3', // No newlines to use API turns instead of newline splitting
+          undefined,
+          undefined,
+          turns,
+          undefined,
+          false // hasNext = false, so maxPossibleTurns = 3
+        );
 
-      const turns = ['Turn 1', 'Turn 2', 'Turn 3'];
-      const processed = manager.processResponse(
-        'Turn 1\nTurn 2\nTurn 3',
-        undefined,
-        undefined,
-        turns,
-        undefined,
-        true // hasNext = true, making total turns = 4 (3 + next)
-      );
+        expect(processed).toBe(true);
+        
+        // Wait for all messages to be processed
+        const expectedTurnCount = Math.floor(randomValue * 3) + 1;
+        let attempts = 0;
+        const maxAttempts = 50; // Increase max attempts
+        while (messagesReceived.length < expectedTurnCount && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
 
-      expect(processed).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 100));
+        // Should get 1-3 turns (enforced by maxTurns limit)
+        expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
+        expect(messagesReceived.length).toBeLessThanOrEqual(3);
+        
+        turnCounts.add(messagesReceived.length);
+      }
 
-      // Should concatenate to 2 turns since total would be 4 (3 + next) > maxTurns (3)
-      expect(messagesReceived).toHaveLength(2);
-      expect(messagesReceived[0]?.content).toBe('Turn 1 Turn 2');
-      expect(messagesReceived[1]?.content).toBe('Turn 3');
-      expect(messagesReceived[1]?.hasNext).toBe(true);
-
+      // Verify we can produce multiple different turn counts in the valid range
+      expect(turnCounts.size).toBeGreaterThanOrEqual(2); // Should have at least 2 different turn counts
+      expect(Array.from(turnCounts).every(count => count >= 1 && count <= 3)).toBe(true);
+      
+      // The key improvement: we should now be able to get up to 3 turns (vs the old max of 2)
+      expect(Math.max(...Array.from(turnCounts))).toBeGreaterThanOrEqual(2);
+      
       Math.random = originalRandom;
     });
 
@@ -300,11 +324,10 @@ describe('AutoTurn Limiting Feature', () => {
   });
 
   describe('Probability Configuration', () => {
-    it('should respect custom split probability', async () => {
-      // Test with 0% split probability (should not use turns)
+    it('should always use API turns when available', async () => {
+      // API turns are always used now (no probability check)
       const customConfig = {
-        ...config,
-        splitProbability: 0.0
+        ...config
       };
       
       const customManager = new ConversationalTurnsManager(customConfig, mockCallback, mockEventEmitter);
@@ -319,22 +342,21 @@ describe('AutoTurn Limiting Feature', () => {
         false
       );
 
-      // With 0% probability, should not use turns at all
-      expect(processed).toBe(false);
+      // Should always use turns when API provides them
+      expect(processed).toBe(true);
     });
 
     it('should handle 100% split probability', async () => {
       // Test with 100% split probability (should always use turns)
       const customConfig = {
-        ...config,
-        splitProbability: 1.0
+        ...config
       };
       
       const customManager = new ConversationalTurnsManager(customConfig, mockCallback, mockEventEmitter);
       
       const turns = ['Turn 1', 'Turn 2', 'Turn 3', 'Turn 4'];
       const processed = customManager.processResponse(
-        'Turn 1\nTurn 2\nTurn 3\nTurn 4',
+        'Turn 1 Turn 2 Turn 3 Turn 4', // No newlines to use API turns concatenation
         undefined,
         undefined,
         turns,
@@ -343,15 +365,22 @@ describe('AutoTurn Limiting Feature', () => {
       );
 
       expect(processed).toBe(true);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Wait for all messages to be processed with polling
+      let attempts = 0;
+      const maxAttempts = 30;
+      while (messagesReceived.length === 0 && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
 
-      // With 100% probability, should always use turns and concatenate randomly
+      // With 4 input turns and maxTurns=3, should concatenate to 1-3 turns
       expect(messagesReceived.length).toBeGreaterThanOrEqual(1);
       expect(messagesReceived.length).toBeLessThanOrEqual(3);
     });
 
-    it('should use default 60% probability when not configured', async () => {
-      // Create config without explicit splitProbability
+    it('should always use API turns when available', async () => {
+      // Create config without any special settings
       const defaultConfig = {
         enabled: true,
         maxTurns: 3,

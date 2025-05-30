@@ -24,7 +24,6 @@ describe('Follow-up Request Handling', () => {
 
     const config: ConversationalTurnsConfig = {
       enabled: true,
-      splitProbability: 1.0, // Always split for testing
       minDelay: 10,
       maxDelay: 20
     };
@@ -242,7 +241,6 @@ describe('Follow-up Request Handling', () => {
       // Create a new manager with disabled conversational turns
       const disabledConfig: ConversationalTurnsConfig = {
         enabled: false,
-        splitProbability: 1.0,
         minDelay: 10,
         maxDelay: 20
       };

@@ -5,7 +5,6 @@ import { ConversationalTurnsConfig } from './types';
  */
 export const DEFAULT_CONVERSATIONAL_TURNS_CONFIG: Required<ConversationalTurnsConfig> = {
   enabled: false,
-  splitProbability: 0.6, // 60% chance to split for natural variation
   baseTypingSpeed: 38, // WPM
   speedVariation: 0.2, // ±20%
   minDelay: 1000, // ms
@@ -27,10 +26,6 @@ export class ConversationalTurnsConfigValidator {
   public static validate(config?: ConversationalTurnsConfig): void {
     if (!config || !config.enabled) return;
     
-    if (config.splitProbability !== undefined &&
-        (config.splitProbability < 0 || config.splitProbability > 1)) {
-      throw new Error('conversationalTurns.splitProbability must be between 0 and 1');
-    }
     
     if (config.baseTypingSpeed !== undefined && config.baseTypingSpeed <= 0) {
       throw new Error('conversationalTurns.baseTypingSpeed must be positive');
