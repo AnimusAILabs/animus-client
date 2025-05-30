@@ -192,7 +192,7 @@ const client = new AnimusClient({
 });
 
 // The SDK handles the entire flow automatically
-await client.chat.send("Show me a picture of a sunset");
+client.chat.send("Show me a picture of a sunset");
 // 1. AI responds with text + image_prompt
 // 2. Conversational turns process the text (if multi-sentence)
 // 3. Image is generated automatically
@@ -210,7 +210,7 @@ When the AI indicates more content is expected (`next: true` in response), the S
 ```javascript
 // Follow-up requests are handled automatically
 // No need to send [CONTINUE] messages manually
-await client.chat.send("Tell me a story");
+client.chat.send("Tell me a story");
 // AI might respond with first part and next: true
 // SDK automatically requests continuation
 // Process repeats until AI indicates completion
@@ -338,7 +338,7 @@ client.on('conversationalTurnsCanceled', (data) => {
 });
 
 // Send a message
-const response = await client.chat.send(
+client.chat.send(
   "Tell me about renewable energy sources and their benefits."
 );
 ```

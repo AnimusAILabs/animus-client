@@ -6,6 +6,8 @@ A Javascript SDK for interacting with the Animus AI API from browser environment
 
 This SDK simplifies authentication and provides convenient methods for accessing Animus AI services like Chat Completions and Media Analysis (Vision).
 
+📖 **[View Full Documentation](https://docs.animusai.co)** - Complete API reference, guides, and examples
+
 ## Features
 
 *   Easy integration into browser-based applications.
@@ -169,7 +171,7 @@ async function main() {
     });
 
     // Send message - may be split into multiple turns with natural delays
-    await clientWithAutoTurn.chat.send("Tell me about renewable energy sources and their benefits.");
+    clientWithAutoTurn.chat.send("Tell me about renewable energy sources and their benefits.");
 
 
     // --- Example: Media Analysis (Image) ---
@@ -297,6 +299,47 @@ const client = new AnimusClient({
 
 Interact with chat models. Accessed via `client.chat`. Requires `chat` options to be configured during client initialization.
 
+#### When to Use Which Method
+
+The chat module provides two main methods for different use cases:
+
+**Use `chat.send()` when:**
+- Building conversational interfaces or chatbots
+- You want automatic chat history management
+- You need conversational turns (natural response splitting)
+- You prefer event-driven responses for real-time UI updates
+- You want automatic follow-up request handling
+- You're building simple chat applications
+
+**Use `chat.completions()` when:**
+- You need full control over the request parameters
+- You want to handle responses synchronously
+- You're building non-conversational AI features (analysis, generation, etc.)
+- You need to send multiple messages at once
+- You want to manage chat history manually
+- You're integrating with existing systems that expect direct responses
+- You need streaming with custom chunk processing
+
+#### Quick Examples
+
+```typescript
+// Use chat.send() for conversational interfaces
+client.on('messageComplete', (data) => {
+  console.log('AI:', data.content);
+  updateChatUI(data.content);
+});
+client.chat.send("Hello, how are you?");
+
+// Use chat.completions() for direct API calls
+const response = await client.chat.completions({
+  messages: [
+    { role: 'system', content: 'Analyze the following text for sentiment.' },
+    { role: 'user', content: 'I love this product!' }
+  ]
+});
+console.log('Analysis:', response.choices[0].message.content);
+```
+
 **ChatMessage Interface:**
 
 ```typescript
@@ -327,24 +370,25 @@ The easiest way to have a conversation. Sends a single user message and gets a r
 import { ApiError, AuthenticationError } from 'animus-client';
 
 // Assumes client was initialized with chat options (model, systemMessage)
-try {
-  const response = await client.chat.send(
-    "Tell me about the Animus Client SDK.",
-    { // Optional overrides for this specific request
-      temperature: 0.8,
-      reasoning: true, // Enable reasoning to see the model's thinking process
-      // model: 'specific-model-override' // Can override model here too
-    }
-  );
+// Set up event listeners for responses
+client.on('messageComplete', (data) => {
+  console.log("AI Response:", data.content);
+  // Check compliance violations if needed: data.compliance_violations
+});
 
-  console.log("AI Response:", response.choices[0].message.content);
-  // Check compliance violations if needed: response.compliance_violations
+client.on('messageError', (data) => {
+  console.error("Message Error:", data.error);
+});
 
-} catch (error) {
-  // Handle errors (see Error Handling section)
-  if (error instanceof ApiError) console.error("API Error:", error.message);
-  else console.error("Error:", error);
-}
+// Send message - responses handled through events
+client.chat.send(
+  "Tell me about the Animus Client SDK.",
+  { // Optional overrides for this specific request
+    temperature: 0.8,
+    reasoning: true, // Enable reasoning to see the model's thinking process
+    // model: 'specific-model-override' // Can override model here too
+  }
+);
 ```
 
 **b) Full Completions (`client.chat.completions`)**
@@ -440,13 +484,16 @@ The Animus API integrates content moderation via the `compliance` parameter.
 #### Non-streaming Compliance Detection
 
 ```typescript
-// Using send() (always non-streaming if it returns a response)
-const response = await client.chat.send("Some potentially non-compliant text.");
-if (response?.compliance_violations?.length > 0) { // Check if response exists and has violations
-  console.warn("Content violations detected:", response.compliance_violations);
-} else if (response) {
-  console.log("AI:", response.choices[0].message.content);
-}
+// Using send() - responses handled through events
+client.on('messageComplete', (data) => {
+  if (data.compliance_violations?.length > 0) {
+    console.warn("Content violations detected:", data.compliance_violations);
+  } else {
+    console.log("AI:", data.content);
+  }
+});
+
+client.chat.send("Some potentially non-compliant text.");
 
 // Using completions()
 const responseComp = await client.chat.completions({
