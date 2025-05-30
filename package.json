@@ -1,7 +1,7 @@
 {
   "name": "animus-client",
   "version": "1.19.0",
-  "description": "Animus AI Javascript SDK for Browser Environments",
+  "description": "Unified AI platform combining text, vision, image generation, and tools in one simple SDK. Build powerful AI conversations with minimal code.",
   "type": "module",
   "main": "dist/animus-sdk.umd.js",
   "module": "dist/animus-sdk.esm.js",

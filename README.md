@@ -2,9 +2,9 @@
 
 [![npm version](https://badge.fury.io/js/animus-client.svg)](https://badge.fury.io/js/animus-client) <!-- Placeholder badge -->
 
-A Javascript SDK for interacting with the Animus AI API from browser environments.
+Unified AI platform combining text, vision, image generation, and tools in one simple SDK. Build powerful AI conversations with minimal code.
 
-This SDK simplifies authentication and provides convenient methods for accessing Animus AI services like Chat Completions and Media Analysis (Vision).
+Skip the complexity of managing multiple AI services - instead of setting up separate cloud infrastructure for vision models, speech processing, language generation, and image creation, the Animus SDK handles it all for you in minimal code.
 
 📖 **[View Full Documentation](https://docs.animusai.co)** - Complete API reference, guides, and examples
 
