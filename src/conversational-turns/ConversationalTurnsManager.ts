@@ -91,7 +91,8 @@ export class ConversationalTurnsManager {
     toolCalls?: ToolCall[],
     apiTurns?: string[],
     imagePrompt?: string,
-    hasNext?: boolean
+    hasNext?: boolean,
+    reasoning?: string | null
   ): boolean {
     // Return false if feature is disabled or no content
     if (!this.messageQueue || !content) {
@@ -145,7 +146,9 @@ export class ConversationalTurnsManager {
       // Only add violations, tool calls, and hasNext to the last message in the group
       compliance_violations: index === splitMessages.length - 1 ? complianceViolations : undefined,
       tool_calls: index === splitMessages.length - 1 ? toolCalls : undefined,
-      hasNext: index === splitMessages.length - 1 ? hasNext : undefined
+      hasNext: index === splitMessages.length - 1 ? hasNext : undefined,
+      // Only add reasoning to the first message in the group to avoid duplication
+      reasoning: index === 0 ? reasoning : undefined
     }));
     
     // If there's an image prompt, add an image generation message to the queue

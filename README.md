@@ -22,6 +22,7 @@ Skip the complexity of managing multiple AI services - instead of setting up sep
 *   **Conversational Turns**: Natural conversation flow with automatic response splitting and realistic typing delays.
 *   **Advanced Conversational Turns Configuration**: Granular control over split probability, typing speeds, delays, and sentence thresholds.
 *   **Automatic Image Generation**: Seamless image generation when responses contain image prompts, with comprehensive event feedback.
+*   **Image Modification**: Modify existing images using text prompts with the same unified API as image generation.
 *   **Smart Follow-Up Requests**: Automatic continuation of conversations when the AI indicates more content is expected.
 *   **Event-Driven Architecture**: Comprehensive events for all operations including turns, image generation, and message processing.
 *   **Robust Message History**: Complete conversation context preservation, including messages with compliance violations for better AI context.
@@ -172,6 +173,17 @@ async function main() {
 
     // Send message - may be split into multiple turns with natural delays
     clientWithAutoTurn.chat.send("Tell me about renewable energy sources and their benefits.");
+
+    // --- Example: Direct Image Generation ---
+    const newImageUrl = await client.generateImage("A futuristic cityscape at night");
+    console.log('Generated image:', newImageUrl);
+
+    // --- Example: Image Modification ---
+    const modifiedImageUrl = await client.generateImage(
+      "Convert to black and white with high contrast",
+      "https://example.com/original-photo.jpg"
+    );
+    console.log('Modified image:', modifiedImageUrl);
 
 
     // --- Example: Media Analysis (Image) ---
@@ -820,16 +832,16 @@ try {
 
 ---
 
-### 7. Image Generation
+### 7. Image Generation and Modification
 
-The SDK provides support for generating images from text prompts. This can be triggered directly or through the chat completion response.
+The SDK provides unified support for both generating new images from text prompts and modifying existing images. This can be triggered directly or through the chat completion response.
 
 #### a) Direct Image Generation (`client.generateImage`)
 
-Generate an image directly from a text prompt:
+Generate a new image from a text prompt:
 
 ```javascript
-// Generate an image from a prompt
+// Generate a new image from a prompt
 try {
   const imageUrl = await client.generateImage("A serene mountain landscape at sunset");
   console.log('Generated image URL:', imageUrl);
@@ -838,10 +850,30 @@ try {
 }
 ```
 
+#### b) Image Modification (`client.generateImage`)
+
+Modify an existing image using the same method by providing an input image URL:
+
+```javascript
+// Modify an existing image
+try {
+  const modifiedImageUrl = await client.generateImage(
+    "Make this a 90s cartoon style",
+    "https://example.com/input-image.jpg"
+  );
+  console.log('Modified image URL:', modifiedImageUrl);
+} catch (error) {
+  console.error('Image modification failed:', error);
+}
+```
+
 The `generateImage` method:
-- Makes an API request to the image generation endpoint
-- Adds the image to chat history automatically
+- **Text-to-Image**: When only a prompt is provided, generates a new image
+- **Image Modification**: When both prompt and input image URL are provided, modifies the existing image
+- Makes an API request to the appropriate image processing endpoint
+- Adds the result to chat history automatically
 - Returns the image URL directly
+- Uses the same events for both generation and modification operations
 
 #### b) Automatic Image Generation via Chat
 
@@ -914,5 +946,30 @@ This project uses `semantic-release` for automated versioning and package publis
 2.  Install dependencies: `npm install`
 3.  Build the SDK: `npm run build` (outputs to `dist/`)
 4.  Run tests: `npm test`
-5.  Run example auth server: `cd examples/auth-server && npm install && npm start`
-6.  Open `examples/test-sdk/index.html` in your browser to test the SDK.
+
+### Quick Demo
+
+Run the complete demo with one command:
+
+```bash
+npm run demo
+```
+
+This command will:
+- Build the latest SDK
+- Start the example auth server on `http://localhost:3001`
+- Start a web server on `http://localhost:8080`
+- Automatically open the demo in your browser
+
+The demo includes:
+- Interactive chat interface with all SDK features
+- Image generation and modification testing
+- Conversational turns configuration
+- Real-time event monitoring
+
+### Manual Setup
+
+Alternatively, you can run components separately:
+
+1. Run example auth server: `cd examples/auth-server && npm install && npm start`
+2. Open `examples/test-sdk/index.html` in your browser to test the SDK.

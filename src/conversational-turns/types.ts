@@ -68,6 +68,7 @@ export interface QueuedMessage {
   messageType?: 'text' | 'image';
   imagePrompt?: string;
   hasNext?: boolean;
+  reasoning?: string | null; // Reasoning content (only for first message in group)
 }
 
 /**
@@ -124,7 +125,8 @@ export type MessageCallback = (
   groupMetadata?: GroupMetadata,
   messageType?: 'text' | 'image',
   imagePrompt?: string,
-  hasNext?: boolean
+  hasNext?: boolean,
+  reasoning?: string | null
 ) => void;
 
 /**

@@ -209,7 +209,8 @@ export class MessageQueue {
         },
         message.messageType || 'text',
         message.imagePrompt,
-        message.hasNext
+        message.hasNext,
+        message.reasoning
       );
       
       this.processedCount++;
@@ -223,7 +224,8 @@ export class MessageQueue {
           turnIndex: message.turnIndex,
           totalTurns: message.totalTurns,
           compliance_violations: message.compliance_violations,
-          tool_calls: message.tool_calls
+          tool_calls: message.tool_calls,
+          ...(message.reasoning && { reasoning: message.reasoning })
         });
       }
       

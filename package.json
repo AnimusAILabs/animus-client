@@ -10,7 +10,12 @@
     "build": "rollup -c",
     "dev": "rollup -c -w",
     "prepare": "npm run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "demo": "npm run demo:build && npm run demo:start",
+    "demo:build": "npm run build",
+    "demo:start": "concurrently \"npm run demo:auth\" \"npm run demo:serve\"",
+    "demo:auth": "cd examples/auth-server && npm start",
+    "demo:serve": "wait-on http://localhost:3001 && http-server . -p 8080 -o examples/test-sdk/"
   },
   "keywords": [
     "animus",
@@ -42,12 +47,15 @@
     "@semantic-release/github": "^11.0.1",
     "@semantic-release/npm": "^12.0.1",
     "@semantic-release/release-notes-generator": "^14.0.3",
+    "concurrently": "^8.2.2",
+    "http-server": "^14.1.1",
     "jsdom": "^26.1.0",
     "rollup": "^4.0.0",
     "semantic-release": "^24.2.3",
     "tslib": "^2.5.0",
     "typescript": "^5.0.0",
-    "vitest": "^3.1.2"
+    "vitest": "^3.1.2",
+    "wait-on": "^8.0.1"
   },
   "files": [
     "dist"

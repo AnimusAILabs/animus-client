@@ -48,7 +48,7 @@ export class ChatHistory {
 
     if (messageToAdd.role === 'assistant') {
         let finalContent = messageToAdd.content || ''; // content can be null
-        let reasoning: string | undefined = undefined;
+        let reasoning: string | undefined = messageToAdd.reasoning; // Preserve existing reasoning from API
         const toolCalls = messageToAdd.tool_calls; // Preserve tool_calls
 
         // Reasoning extraction only applies if there's content
@@ -58,8 +58,10 @@ export class ChatHistory {
             const match = finalContent.match(thinkRegex); // Match on the original content
 
             if (match && match[0] && match[1]) {
-                // Found a think block
-                reasoning = match[1].trim(); // Extract content inside tags
+                // Found a think block - only override existing reasoning if we don't already have it
+                if (!reasoning) {
+                    reasoning = match[1].trim(); // Extract content inside tags
+                }
                 // Construct the cleaned content by removing the matched block
                 finalContent = finalContent.replace(match[0], '').trim();
                 // Fix any double spaces that might occur when removing the block

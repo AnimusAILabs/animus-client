@@ -674,3 +674,122 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log("Dynamic configuration update handlers attached to form fields");
     }, 500); // 500ms delay
 });
+
+// Image Modification Demo Functions
+function setupImageModificationDemo() {
+    const testImageModificationButton = document.getElementById('test-image-modification');
+    const testImageGenerationButton = document.getElementById('test-image-generation');
+    const inputImageUrlInput = document.getElementById('input-image-url');
+    const modificationPromptInput = document.getElementById('modification-prompt');
+
+    if (testImageModificationButton) {
+        testImageModificationButton.addEventListener('click', async () => {
+            if (!client) {
+                addMessage('system', '❌ Client not initialized', null, 'turn-canceled');
+                return;
+            }
+
+            const inputImageUrl = inputImageUrlInput?.value?.trim();
+            const prompt = modificationPromptInput?.value?.trim();
+
+            if (!inputImageUrl) {
+                addMessage('system', '❌ Please enter an input image URL', null, 'turn-canceled');
+                return;
+            }
+
+            if (!prompt) {
+                addMessage('system', '❌ Please enter a modification prompt', null, 'turn-canceled');
+                return;
+            }
+
+            try {
+                testImageModificationButton.disabled = true;
+                testImageModificationButton.textContent = 'Modifying Image...';
+                
+                logOutput(`🎨 Testing image modification: "${prompt}" on "${inputImageUrl}"`);
+                addMessage('system', `🎨 Testing image modification: "${prompt}"`, null, 'turn-indicator');
+
+                const resultUrl = await client.generateImage(prompt, inputImageUrl);
+                
+                logOutput(`✅ Image modification completed: ${resultUrl}`);
+                
+                // Remove the indicator and show the result
+                removeAllTurnIndicators();
+                const resultMessage = addMessage('assistant', '');
+                const imgElement = document.createElement('img');
+                imgElement.src = resultUrl;
+                imgElement.alt = `Modified: ${prompt}`;
+                imgElement.style.maxWidth = '100%';
+                imgElement.style.height = 'auto';
+                imgElement.style.borderRadius = '8px';
+                imgElement.style.marginTop = '8px';
+                
+                resultMessage.textContent = `✅ Image modified successfully:`;
+                resultMessage.appendChild(imgElement);
+                
+            } catch (error) {
+                logOutput(`❌ Image modification failed: ${error.message || error}`, true);
+                removeAllTurnIndicators();
+                addMessage('system', `❌ Image modification failed: ${error.message || error}`, null, 'turn-canceled');
+            } finally {
+                testImageModificationButton.disabled = false;
+                testImageModificationButton.textContent = 'Test Image Modification';
+            }
+        });
+    }
+
+    if (testImageGenerationButton) {
+        testImageGenerationButton.addEventListener('click', async () => {
+            if (!client) {
+                addMessage('system', '❌ Client not initialized', null, 'turn-canceled');
+                return;
+            }
+
+            const prompt = modificationPromptInput?.value?.trim();
+
+            if (!prompt) {
+                addMessage('system', '❌ Please enter a prompt for image generation', null, 'turn-canceled');
+                return;
+            }
+
+            try {
+                testImageGenerationButton.disabled = true;
+                testImageGenerationButton.textContent = 'Generating Image...';
+                
+                logOutput(`🎨 Testing image generation: "${prompt}"`);
+                addMessage('system', `🎨 Testing image generation: "${prompt}"`, null, 'turn-indicator');
+
+                const resultUrl = await client.generateImage(prompt);
+                
+                logOutput(`✅ Image generation completed: ${resultUrl}`);
+                
+                // Remove the indicator and show the result
+                removeAllTurnIndicators();
+                const resultMessage = addMessage('assistant', '');
+                const imgElement = document.createElement('img');
+                imgElement.src = resultUrl;
+                imgElement.alt = prompt;
+                imgElement.style.maxWidth = '100%';
+                imgElement.style.height = 'auto';
+                imgElement.style.borderRadius = '8px';
+                imgElement.style.marginTop = '8px';
+                
+                resultMessage.textContent = `✅ Image generated successfully:`;
+                resultMessage.appendChild(imgElement);
+                
+            } catch (error) {
+                logOutput(`❌ Image generation failed: ${error.message || error}`, true);
+                removeAllTurnIndicators();
+                addMessage('system', `❌ Image generation failed: ${error.message || error}`, null, 'turn-canceled');
+            } finally {
+                testImageGenerationButton.disabled = false;
+                testImageGenerationButton.textContent = 'Test Image Generation';
+            }
+        });
+    }
+}
+
+// Call the setup function after initialization
+setTimeout(() => {
+    setupImageModificationDemo();
+}, 1000); // Wait a bit longer to ensure client is ready

@@ -58,6 +58,7 @@ export class StreamingHandler {
     let complianceViolations: string[] | undefined;
     let accumulatedTurns: string[] | undefined;
     let hasNext: boolean | undefined;
+    let accumulatedReasoning: string | null = null;
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -94,15 +95,17 @@ export class StreamingHandler {
                   accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
                   accumulatedTurns,
                   undefined, // imagePrompt - not supported in streaming yet
-                  hasNext
+                  hasNext,
+                  accumulatedReasoning
                 );
                 
                 // If not processed by turns manager, emit completion event and add to history directly
                 if (!wasProcessed) {
                   // Emit messageComplete event
                   if (this.eventEmitter) {
-                    this.eventEmitter('messageComplete', { 
+                    this.eventEmitter('messageComplete', {
                       content: accumulatedContent || '',
+                      ...(accumulatedReasoning && { reasoning: accumulatedReasoning }),
                       ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
                     });
                   }
@@ -120,6 +123,7 @@ export class StreamingHandler {
                 if (this.eventEmitter) {
                   this.eventEmitter('messageComplete', {
                     content: accumulatedContent || '',
+                    ...(accumulatedReasoning && { reasoning: accumulatedReasoning }),
                     ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
                   });
                 }
@@ -214,6 +218,12 @@ export class StreamingHandler {
                                 }
                             }
                         });
+                    }
+                    
+                    // Accumulate reasoning content
+                    if (delta.reasoning) {
+                        if (accumulatedReasoning === null) accumulatedReasoning = "";
+                        accumulatedReasoning += delta.reasoning;
                     }
                     
                     // Accumulate turns and next fields from autoTurn feature
@@ -316,6 +326,7 @@ export class StreamingHandler {
     let complianceViolations: string[] | undefined;
     let accumulatedTurns: string[] | undefined;
     let hasNext: boolean | undefined;
+    let accumulatedReasoning: string | null = null;
     let buffer = '';
 
     try {
@@ -363,13 +374,15 @@ export class StreamingHandler {
                   accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
                   accumulatedTurns,
                   undefined, // imagePrompt - not supported in streaming yet
-                  hasNext
+                  hasNext,
+                  accumulatedReasoning
                 );
                 
                 // Always emit messageComplete regardless of whether it was processed by turns
                 if (this.eventEmitter) {
                   this.eventEmitter('messageComplete', {
                     content: accumulatedContent || '',
+                    ...(accumulatedReasoning && { reasoning: accumulatedReasoning }),
                     ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
                   });
                 }
@@ -390,6 +403,7 @@ export class StreamingHandler {
                 if (this.eventEmitter) {
                   this.eventEmitter('messageComplete', {
                     content: accumulatedContent || '',
+                    ...(accumulatedReasoning && { reasoning: accumulatedReasoning }),
                     ...(accumulatedToolCalls.length > 0 && { toolCalls: accumulatedToolCalls })
                   });
                 }
@@ -470,6 +484,12 @@ export class StreamingHandler {
                         }
                       }
                     });
+                  }
+                  
+                  // Accumulate reasoning content
+                  if (delta.reasoning) {
+                    if (accumulatedReasoning === null) accumulatedReasoning = "";
+                    accumulatedReasoning += delta.reasoning;
                   }
                   
                   // Accumulate turns and next fields from autoTurn feature

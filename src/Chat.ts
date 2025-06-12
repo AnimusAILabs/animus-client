@@ -26,7 +26,7 @@ export class ChatModule {
   private chatHistory: ChatHistory; // Chat history manager
   
   // Reference to the parent client's generateImage function
-  private generateImage?: (prompt: string) => Promise<string>;
+  private generateImage?: (prompt: string, inputImageUrl?: string) => Promise<string>;
   
   // Event emitter for conversational turn events (passed from AnimusClient)
   private eventEmitter?: (event: string, data: any) => void;
@@ -47,7 +47,7 @@ export class ChatModule {
       requestUtil: RequestUtil,
       chatOptions: AnimusChatOptions | undefined, // Receive the whole config object or undefined
       // Add generateImage function from parent client
-      generateImage?: (prompt: string) => Promise<string>,
+      generateImage?: (prompt: string, inputImageUrl?: string) => Promise<string>,
       // Add event emitter for conversational turn events
       eventEmitter?: (event: string, data: any) => void
   ) {
@@ -112,14 +112,14 @@ export class ChatModule {
        
        this.conversationalTurnsManager = new ConversationalTurnsManager(
          config,
-         (content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext) => {
+         (content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext, reasoning) => {
            if (messageType === 'image' && imagePrompt) {
              // Handle image generation
              
              this.generateImageAndHandleNext(imagePrompt, hasNext);
            } else {
              // Handle regular text message
-             this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata, null);
+             this.addAssistantResponseToHistory(content, violations, toolCalls, groupMetadata, reasoning);
              
              // Handle automatic follow-up if next is true (for conversational turns)
              if (hasNext) {
@@ -291,7 +291,8 @@ export class ChatModule {
                   assistantToolCalls,
                   apiTurns, // Pass API-provided turns
                   imagePrompt,
-                  hasNext
+                  hasNext,
+                  assistantReasoning ?? null // Pass reasoning
               );
               
               
@@ -485,7 +486,8 @@ export class ChatModule {
                               toolCalls,
                               turns,
                               imagePrompt,
-                              next
+                              next,
+                              reasoning
                           );
                       }
                       

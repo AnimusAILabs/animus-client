@@ -132,15 +132,18 @@ export class AnimusClient extends ClientEventManager {
     }
 
     /**
-     * Generates an image based on the provided prompt.
-     * Returns the URL of the generated image and adds it to chat history.
+     * Generates or modifies an image based on the provided prompt.
+     * When inputImageUrl is provided, modifies the existing image.
+     * When inputImageUrl is not provided, generates a new image from scratch.
+     * Returns the URL of the generated/modified image and adds it to chat history.
      *
-     * @param prompt - The text prompt to generate an image from
-     * @returns A Promise resolving to the URL of the generated image
-     * @throws {ApiError} If the image generation fails
+     * @param prompt - The text prompt to generate or modify an image
+     * @param inputImageUrl - Optional URL of the input image to modify
+     * @returns A Promise resolving to the URL of the generated/modified image
+     * @throws {ApiError} If the image generation/modification fails
      */
-    public async generateImage(prompt: string): Promise<string> {
-        return this.imageGenerator.generateImage(prompt);
+    public async generateImage(prompt: string, inputImageUrl?: string): Promise<string> {
+        return this.imageGenerator.processImage(prompt, inputImageUrl);
     }
 }
 
