@@ -1,6 +1,6 @@
 {
   "name": "animus-client",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "description": "Unified AI platform combining text, vision, image generation, and tools in one simple SDK. Build powerful AI conversations with minimal code.",
   "type": "module",
   "main": "dist/animus-sdk.umd.js",

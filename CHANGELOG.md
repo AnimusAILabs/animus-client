@@ -1,3 +1,15 @@
+# [1.21.0](https://github.com/AnimusAILabs/animus-client/compare/v1.20.0...v1.21.0) (2025-06-12)
+
+
+### Bug Fixes
+
+* Add reasoning parameter to message handling pipeline ([03846f1](https://github.com/AnimusAILabs/animus-client/commit/03846f19df3c3bfc74dad0742619657b98100ef0))
+
+
+### Features
+
+* add image modification capability to SDK ([9072cd3](https://github.com/AnimusAILabs/animus-client/commit/9072cd31acbebe835a611a9b8412c43ea593e624))
+
 # [1.20.0](https://github.com/AnimusAILabs/animus-client/compare/v1.19.0...v1.20.0) (2025-05-30)
 
 
