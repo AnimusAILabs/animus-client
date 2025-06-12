@@ -270,7 +270,8 @@ export class StreamingHandler {
           accumulatedToolCalls.length > 0 ? accumulatedToolCalls : undefined,
           undefined, // apiTurns - not available in error case
           undefined, // imagePrompt - not supported in streaming yet
-          undefined  // hasNext - not available in error case
+          undefined, // hasNext - not available in error case
+          accumulatedReasoning // reasoning - may be available even in error case
         );
         
         // If not processed by turns manager, fall back to standard history update

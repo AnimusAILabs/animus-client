@@ -55,7 +55,8 @@ export class ConversationalTurnsManager {
         groupMetadata?: any,
         messageType?: 'text' | 'image',
         imagePrompt?: string,
-        hasNext?: boolean
+        hasNext?: boolean,
+        reasoning?: string | null
       ) => {
         // Check if this specific message was canceled
         const messageId = `${groupMetadata?.groupId}_${groupMetadata?.messageIndex}`;
@@ -65,7 +66,7 @@ export class ConversationalTurnsManager {
         }
         
         if (onMessageCallback) {
-          onMessageCallback(content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext);
+          onMessageCallback(content, violations, toolCalls, groupMetadata, messageType, imagePrompt, hasNext, reasoning);
         }
       };
       
@@ -94,6 +95,14 @@ export class ConversationalTurnsManager {
     hasNext?: boolean,
     reasoning?: string | null
   ): boolean {
+    // Debug logging
+    console.log('ConversationalTurnsManager.processResponse called with:', {
+      content: content?.substring(0, 50) + '...',
+      hasApiTurns: !!apiTurns,
+      apiTurnsLength: apiTurns?.length,
+      reasoning: reasoning?.substring(0, 50) + '...'
+    });
+    
     // Return false if feature is disabled or no content
     if (!this.messageQueue || !content) {
       return false;

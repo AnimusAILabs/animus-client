@@ -290,6 +290,7 @@ export class FollowUpHandler {
       if (choice?.message) {
         const message = choice.message;
         const content = message.content;
+        const reasoning = message.reasoning;
         const toolCalls = message.tool_calls;
         const turns = message.turns;
         const next = message.next;
@@ -304,7 +305,8 @@ export class FollowUpHandler {
             toolCalls,
             turns,
             imagePrompt,
-            next
+            next,
+            reasoning
           );
         }
         

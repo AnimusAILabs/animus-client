@@ -129,7 +129,8 @@ describe('AutoTurn Limiting Feature', () => {
           undefined,
           turns,
           undefined,
-          false // hasNext = false, so maxPossibleTurns = 3
+          false, // hasNext = false, so maxPossibleTurns = 3
+          undefined // reasoning
         );
 
         expect(processed).toBe(true);
@@ -401,7 +402,8 @@ describe('AutoTurn Limiting Feature', () => {
         undefined,
         turns,
         undefined,
-        false
+        false,
+        undefined // reasoning
       );
 
       expect(processed).toBe(true);
@@ -448,7 +450,8 @@ describe('AutoTurn Limiting Feature', () => {
         expect.any(Object),
         "text",
         undefined,
-        false
+        false,
+        undefined // reasoning parameter
       );
 
       Math.random = originalRandom;
@@ -482,7 +485,8 @@ describe('AutoTurn Limiting Feature', () => {
         expect.any(Object),
         "text",
         undefined,
-        false
+        false,
+        undefined // reasoning parameter
       );
 
       Math.random = originalRandom;
